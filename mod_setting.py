@@ -20,6 +20,7 @@ class ModuleSetting(PluginModuleBase):
         try:
             if command == "connection_test":
                 identity = self.service._request("/identity")
+                P.logger.info("GUARD_CONNECTION_TEST status=%s latency_ms=%s error=%s", identity.get("status"), identity.get("latency_ms"), identity.get("error") or "-")
                 return jsonify({
                     "ret": "success" if identity.get("ok") else "warning",
                     "msg": "Plex 연결을 확인했습니다." if identity.get("ok") else "Plex 연결을 확인하지 못했습니다.",
@@ -27,6 +28,7 @@ class ModuleSetting(PluginModuleBase):
                 })
             if command == "deployment_detect":
                 data = self.service.deployment()
+                P.logger.info("GUARD_DEPLOYMENT detected=%s control=%s reason=%s", data.get("detected"), data.get("control"), data.get("reason") or "-")
                 return jsonify({"ret": "success", "msg": "Plex 설치 방식을 점검했습니다.", "data": data})
             return jsonify({"ret": "warning", "msg": "지원하지 않는 요청입니다."}), 400
         except Exception as error:

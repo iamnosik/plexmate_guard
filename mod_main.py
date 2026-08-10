@@ -25,6 +25,7 @@ class ModuleMain(PluginModuleBase):
             "timeout_threshold": "2",
             "baseline_scan_limit": "2",
             "desired_scan_limit": "",
+            "detailed_log_enabled": "True",
         }
         P.plexmate_guard_service = PlexmateGuardService(P)
 
@@ -77,6 +78,7 @@ class ModuleMain(PluginModuleBase):
             P.logger.error(traceback.format_exc())
 
     def setting_save_after(self, change_list):
+        P.logger.info("GUARD_SETTING saved_keys=%s", ",".join(sorted(change_list)))
         if not any(key in change_list for key in ("guard_enabled", "main_auto_start", "main_interval")):
             return
         try:

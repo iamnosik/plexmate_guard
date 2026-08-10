@@ -8,6 +8,7 @@
   {{ macros.setting_checkbox('guard_enabled', 'Guard 사용', value=arg['guard_enabled'], desc=['ON이면 설정한 주기로 상태를 기록합니다.', '1차 버전은 자동 일시정지·자동 재시작을 수행하지 않습니다.']) }}
   {{ macros.setting_checkbox('main_auto_start', '자동 관찰 실행', value=arg['main_auto_start'], desc=['Guard 사용 ON일 때만 동작합니다.']) }}
   {{ macros.setting_input_text('main_interval', '관찰 주기', value=arg['main_interval'], desc=['분 단위 또는 Cron 형식', '기본값: 2']) }}
+  {{ macros.setting_checkbox('detailed_log_enabled', '상세 운영 로그', value=arg['detailed_log_enabled'], desc=['조회·관찰마다 상태 판단 근거를 Guard 로그에 기록합니다.', 'Plex 토큰·원본 로그 내용·개별 파일 경로는 기록하지 않습니다.']) }}
   {{ macros.m_hr() }}
   <h4>Plex 설치 방식</h4>
   {{ macros.setting_select('deployment_mode', '설치 방식', [['auto','자동 감지'], ['native','Synology 네이티브'], ['docker','Docker'], ['external','외부 서버(감시만)']], value=arg['deployment_mode'], desc=['자동 재시작은 지원하지 않습니다.', '대시보드 수동 재시작은 사용자가 두 번 확인한 경우에만 한 번 요청합니다.']) }}

@@ -242,13 +242,16 @@ class PlexmateGuardService:
     def manual_restart(self, confirmed):
         """Request exactly one user-confirmed Plex restart; never retry it."""
         if not confirmed:
+            P.logger.warning("GUARD_RESTART result=blocked reason=confirmation_missing")
             return {"success": False, "message": "재시작 확인이 필요합니다."}
         preflight = self.manual_restart_preflight()
         if not preflight.get("success"):
             ModelGuardEvent.record("manual", "RESTART_BLOCKED", "preflight", preflight["message"], {"deployment": preflight.get("deployment", {})})
+            P.logger.warning("GUARD_RESTART result=blocked reason=%s", preflight["message"])
             return preflight
 
         target = preflight["target"]
+        P.logger.warning("GUARD_RESTART result=requested target=%s plexmate_limit=0", target)
         try:
             if target == "native":
                 command = ["chroot", "/host", "/usr/syno/bin/synopkg", "restart", "PlexMediaServer"]
@@ -264,18 +267,52 @@ class PlexmateGuardService:
             if success:
                 message = "Plex 재시작 요청을 전달했습니다. 1~2분 뒤 새로고침으로 상태를 확인하세요."
                 ModelGuardEvent.record("manual", "RESTART_REQUESTED", target, message, {"detail": detail, "deployment": preflight.get("deployment", {})})
+                P.logger.warning("GUARD_RESTART result=accepted target=%s detail=%s", target, detail or "-")
                 return {"success": True, "message": message, "target": target}
             message = "Plex 재시작 요청이 실패했습니다. 자동 재시도하지 않았습니다. %s" % (detail or "명령 실패")
             ModelGuardEvent.record("manual", "RESTART_ERROR", target, message, {"detail": detail, "deployment": preflight.get("deployment", {})})
+            P.logger.error("GUARD_RESTART result=error target=%s detail=%s", target, detail or "-")
             return {"success": False, "message": message, "target": target}
         except subprocess.TimeoutExpired:
             message = "Plex 재시작 명령의 응답 시간이 초과되었습니다. 자동 재시도하지 않았습니다. DSM 패키지 센터에서 상태를 확인하세요."
             ModelGuardEvent.record("manual", "RESTART_TIMEOUT", target, message, {"deployment": preflight.get("deployment", {})})
+            P.logger.error("GUARD_RESTART result=timeout target=%s", target)
             return {"success": False, "message": message, "target": target}
         except Exception as error:
             message = "Plex 재시작 요청을 실행하지 못했습니다: %s" % type(error).__name__
             ModelGuardEvent.record("manual", "RESTART_ERROR", target, message, {"deployment": preflight.get("deployment", {})})
+            P.logger.error("GUARD_RESTART result=exception target=%s error=%s", target, type(error).__name__)
             return {"success": False, "message": message, "target": target}
+
+    def log_snapshot(self, trigger, snapshot):
+        """Write one redacted operational line for each collection cycle."""
+        if not P.ModelSetting.get_bool("detailed_log_enabled"):
+            return
+        logs = snapshot.get("logs", {})
+        plexmate = snapshot.get("plexmate", {})
+        counts = plexmate.get("counts", {})
+        deploy = snapshot.get("deployment", {})
+        identity = snapshot.get("identity", {})
+        library = snapshot.get("library", {})
+        P.logger.info(
+            "GUARD_OBSERVE trigger=%s state=%s plex=http%s/%sms library=http%s/%sms "
+            "queue=%s delta_10m=%s sjva_max=%ss timeout_10m=%s plexmate=R%s/E%s/S%s "
+            "limit=%s/%s deploy=%s/%s load=%s process_count=%s log=%s",
+            trigger, snapshot.get("state"), identity.get("status"), identity.get("latency_ms"),
+            library.get("status"), library.get("latency_ms"), logs.get("queue"),
+            logs.get("queue_delta_10m"), logs.get("max_wait_seconds"), logs.get("timeout_count"),
+            counts.get("READY", 0), counts.get("ENQUEUE", 0), counts.get("SCANNING", 0),
+            snapshot.get("desired_limit") or "-", snapshot.get("actual_limit") or "-",
+            deploy.get("detected"), deploy.get("control"), "/".join(snapshot.get("host", {}).get("load", [])),
+            len(snapshot.get("processes", {}).get("rows", [])), "ok" if logs.get("available") else logs.get("error"),
+        )
+        if snapshot.get("state") in ("METADATA_BLOCKED", "PLEX_UNAVAILABLE", "MIGRATION"):
+            waits = ["%s:%ss" % (item.get("agent"), item.get("seconds")) for item in logs.get("agent_waits", [])[:3]]
+            P.logger.warning(
+                "GUARD_ALERT state=%s reason=%s candidates=%s waits=%s deployment_reason=%s",
+                snapshot.get("state"), snapshot.get("message"), len(logs.get("searches", [])),
+                ",".join(waits) or "-", deploy.get("reason") or "-",
+            )
 
     def decide_state(self, identity, logs):
         body = identity.get("body") or b""
@@ -318,6 +355,7 @@ class PlexmateGuardService:
             for candidate in logs.get("searches", []):
                 ModelMetadataRetry.upsert_candidate(candidate, "metadata_blocked")
         ModelGuardEvent.record(trigger, state, "observe", message, snapshot)
+        self.log_snapshot(trigger, snapshot)
         return snapshot
 
     def current_scan_limit(self):
@@ -342,10 +380,12 @@ class PlexmateGuardService:
             P.ModelSetting.set("desired_scan_limit", str(limit))
             message = "Plexmate 신규 스캔 제한을 %s로 설정했습니다." % limit
             ModelGuardEvent.record("manual", "MANUAL_CONTROL", action, message, {"previous": current, "requested": limit})
+            P.logger.info("GUARD_CONTROL action=%s previous_limit=%s requested_limit=%s result=success", action, current, limit)
             return {"success": True, "message": message, "previous": current, "requested": limit}
         except Exception as error:
             message = "Plexmate 실행 제한을 변경하지 못했습니다: %s" % type(error).__name__
             ModelGuardEvent.record("manual", "CONTROL_ERROR", action, message, {})
+            P.logger.error("GUARD_CONTROL action=%s result=error error=%s", action, type(error).__name__)
             return {"success": False, "message": message}
 
     def restore_baseline(self):
