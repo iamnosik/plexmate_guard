@@ -21,6 +21,8 @@ class ModuleMain(PluginModuleBase):
             "plex_log_path": "/host/volume1/PlexMediaServer/AppData/Plex Media Server/Logs/Plex Media Server.log",
             "http_timeout_seconds": "3",
             "metadata_refresh_timeout_seconds": "30",
+            "metadata_batch_interval_seconds": "5",
+            "metadata_batch_ready_wait_seconds": "300",
             "log_tail_bytes": "1048576",
             "agent_wait_threshold_seconds": "60",
             "timeout_threshold": "2",
@@ -56,7 +58,18 @@ class ModuleMain(PluginModuleBase):
             elif command == "manual_restart":
                 data = self.service.manual_restart(req.form.get("confirm") == "yes")
             elif command == "retries":
-                return jsonify({"ret": "success", "data": ModelMetadataRetry.recent()})
+                return jsonify({"ret": "success", "data": {
+                    "pending": ModelMetadataRetry.recent(statuses=["pending"]),
+                    "history": ModelMetadataRetry.recent(statuses=["refresh_requested", "archived"]),
+                    "counts": ModelMetadataRetry.status_counts(),
+                    "batch": self.service.batch_status(),
+                }})
+            elif command == "batch_start":
+                data = self.service.start_metadata_batch()
+            elif command == "batch_stop":
+                data = self.service.stop_metadata_batch()
+            elif command == "archive_requested":
+                data = self.service.archive_requested_metadata()
             elif command == "retry_refresh":
                 data = self.service.request_metadata_refresh(req.form.get("id"))
             elif command == "history":

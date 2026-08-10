@@ -9,6 +9,7 @@ import json
 import os
 import sqlite3
 import subprocess
+import threading
 import time
 import urllib.error
 import urllib.parse
@@ -24,6 +25,13 @@ from .setup import *
 class PlexmateGuardService:
     def __init__(self, plugin):
         self.plugin = plugin
+        self._batch_lock = threading.Lock()
+        self._batch_stop = threading.Event()
+        self._batch_thread = None
+        self._batch_state = {
+            "status": "idle", "total": 0, "completed": 0, "unconfirmed": 0,
+            "failed": 0, "current_id": None, "message": "대기 중", "started_at": None,
+        }
 
     @staticmethod
     def _integer(value, default=0, minimum=None, maximum=None):
@@ -391,6 +399,121 @@ class PlexmateGuardService:
     def restore_baseline(self):
         baseline = self._integer(P.ModelSetting.get("baseline_scan_limit"), 2, 1, 20)
         return self.set_scan_limit(baseline, "restore_baseline")
+
+    def batch_status(self):
+        with self._batch_lock:
+            data = dict(self._batch_state)
+            data["running"] = bool(self._batch_thread and self._batch_thread.is_alive())
+        return data
+
+    def _set_batch_state(self, **values):
+        with self._batch_lock:
+            self._batch_state.update(values)
+
+    def start_metadata_batch(self):
+        with self._batch_lock:
+            if self._batch_thread and self._batch_thread.is_alive():
+                return {"success": False, "message": "이미 전체 metadata 갱신 작업이 실행 중입니다."}
+
+        snapshot = self.collect("batch_preflight")
+        if str(snapshot.get("actual_limit")) != "0":
+            return {"success": False, "message": "전체 갱신 전에는 Plexmate 신규 스캔 제한을 0으로 설정하세요."}
+        if snapshot.get("state") != "NORMAL":
+            return {"success": False, "message": "Plex가 안정화된 NORMAL 상태에서만 전체 갱신을 시작합니다. 현재: %s" % snapshot.get("state")}
+        item_ids = ModelMetadataRetry.pending_ids()
+        if not item_ids:
+            return {"success": False, "message": "전체 갱신할 대기 후보가 없습니다."}
+
+        self._batch_stop.clear()
+        self._set_batch_state(status="running", total=len(item_ids), completed=0, unconfirmed=0, failed=0, current_id=None, message="순차 갱신을 시작했습니다.", started_at=datetime.now().isoformat(timespec="seconds"))
+        self._batch_thread = threading.Thread(target=self._batch_worker, args=(item_ids,), daemon=True, name="plexmate-guard-metadata-batch")
+        self._batch_thread.start()
+        ModelGuardEvent.record("manual", "METADATA_BATCH", "start", "전체 metadata 순차 갱신을 시작했습니다.", {"total": len(item_ids)})
+        P.logger.warning("GUARD_METADATA_BATCH result=started total=%s interval_s=%s", len(item_ids), self._integer(P.ModelSetting.get("metadata_batch_interval_seconds"), 5, 2, 60))
+        return {"success": True, "message": "%s건의 전체 metadata 갱신을 순차로 시작했습니다." % len(item_ids)}
+
+    def stop_metadata_batch(self):
+        status = self.batch_status()
+        if not status.get("running"):
+            return {"success": False, "message": "실행 중인 전체 갱신 작업이 없습니다."}
+        self._batch_stop.set()
+        self._set_batch_state(status="stopping", message="현재 요청이 끝난 뒤 중지합니다.")
+        P.logger.warning("GUARD_METADATA_BATCH result=stop_requested current_id=%s", status.get("current_id"))
+        return {"success": True, "message": "현재 요청이 끝난 뒤 전체 갱신을 중지합니다."}
+
+    def _batch_pause(self, message):
+        self._set_batch_state(status="paused", current_id=None, message=message)
+        ModelGuardEvent.record("batch", "METADATA_BATCH", "paused", message, self.batch_status())
+        P.logger.warning("GUARD_METADATA_BATCH result=paused message=%s", message)
+
+    def _wait_for_batch_ready(self):
+        """Wait for normal post-refresh work to drain before the next request."""
+        interval = self._integer(P.ModelSetting.get("metadata_batch_interval_seconds"), 5, 2, 60)
+        maximum_wait = self._integer(P.ModelSetting.get("metadata_batch_ready_wait_seconds"), 300, 30, 1800)
+        waited = 0
+        while True:
+            if self._batch_stop.is_set():
+                self._set_batch_state(status="stopped", current_id=None, message="사용자 요청으로 중지했습니다.")
+                ModelGuardEvent.record("batch", "METADATA_BATCH", "stopped", "사용자 요청으로 전체 metadata 갱신을 중지했습니다.", self.batch_status())
+                P.logger.warning("GUARD_METADATA_BATCH result=stopped")
+                return False
+            snapshot = self.collect("batch_item_preflight")
+            if str(snapshot.get("actual_limit")) != "0":
+                self._batch_pause("Plexmate 제한이 0이 아니어서 전체 갱신을 중지했습니다.")
+                return False
+            state = snapshot.get("state")
+            if state == "NORMAL":
+                return True
+            if state == "BUSY" and waited < maximum_wait:
+                self._set_batch_state(status="waiting", current_id=None, message="Plex가 이전 요청을 처리 중입니다. %s/%s초 대기" % (waited, maximum_wait))
+                P.logger.info("GUARD_METADATA_BATCH result=waiting waited_s=%s max_wait_s=%s", waited, maximum_wait)
+                if self._batch_stop.wait(interval):
+                    continue
+                waited += interval
+                continue
+            if state == "BUSY":
+                self._batch_pause("Plex가 %s초 동안 계속 BUSY 상태여서 전체 갱신을 중지했습니다." % maximum_wait)
+            else:
+                self._batch_pause("Plex 상태가 %s여서 전체 갱신을 중지했습니다." % state)
+            return False
+
+    def _batch_worker(self, item_ids):
+        interval = self._integer(P.ModelSetting.get("metadata_batch_interval_seconds"), 5, 2, 60)
+        for retry_id in item_ids:
+            if not self._wait_for_batch_ready():
+                return
+
+            self._set_batch_state(status="running", current_id=retry_id, message="ratingKey 요청 중")
+            result = self.request_metadata_refresh(retry_id)
+            row = ModelMetadataRetry.get(retry_id)
+            status = row.status if row else "missing"
+            state = self.batch_status()
+            if status == "refresh_requested":
+                self._set_batch_state(completed=state["completed"] + 1, current_id=None, message="요청 완료")
+                P.logger.info("GUARD_METADATA_BATCH result=requested retry_id=%s", retry_id)
+            else:
+                message = result.get("message") or "metadata 요청 실패"
+                self._set_batch_state(status="paused", failed=state["failed"] + 1, current_id=None, message=message)
+                ModelGuardEvent.record("batch", "METADATA_BATCH", "paused", message, self.batch_status())
+                P.logger.warning("GUARD_METADATA_BATCH result=paused retry_id=%s message=%s", retry_id, message)
+                return
+
+            if self._batch_stop.wait(interval):
+                self._set_batch_state(status="stopped", current_id=None, message="사용자 요청으로 중지했습니다.")
+                ModelGuardEvent.record("batch", "METADATA_BATCH", "stopped", "사용자 요청으로 전체 metadata 갱신을 중지했습니다.", self.batch_status())
+                P.logger.warning("GUARD_METADATA_BATCH result=stopped")
+                return
+
+        self._set_batch_state(status="completed", current_id=None, message="대기 후보의 요청 처리를 마쳤습니다.")
+        ModelGuardEvent.record("batch", "METADATA_BATCH", "completed", "전체 metadata 순차 갱신을 완료했습니다.", self.batch_status())
+        P.logger.warning("GUARD_METADATA_BATCH result=completed total=%s", len(item_ids))
+
+    def archive_requested_metadata(self):
+        count = ModelMetadataRetry.archive_requested()
+        message = "%s건의 요청 완료 항목을 삭제하지 않고 이력으로 보관했습니다." % count
+        ModelGuardEvent.record("manual", "METADATA_ARCHIVE", "archive_requested", message, {"count": count})
+        P.logger.info("GUARD_METADATA_ARCHIVE archived=%s", count)
+        return {"success": True, "message": message, "count": count}
 
     def request_metadata_refresh(self, retry_id):
         row = ModelMetadataRetry.get(retry_id)

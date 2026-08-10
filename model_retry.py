@@ -39,11 +39,37 @@ class ModelMetadataRetry(ModelBase):
             return row.id
 
     @classmethod
-    def recent(cls, limit=100):
+    def recent(cls, limit=100, statuses=None):
         limit = max(1, min(int(limit or 100), 300))
         with F.app.app_context():
-            rows = F.db.session.query(cls).order_by(cls.id.desc()).limit(limit).all()
+            query = F.db.session.query(cls)
+            if statuses:
+                query = query.filter(cls.status.in_(list(statuses)))
+            rows = query.order_by(cls.id.desc()).limit(limit).all()
         return [row.to_dict() for row in rows]
+
+    @classmethod
+    def pending_ids(cls):
+        with F.app.app_context():
+            rows = F.db.session.query(cls.id).filter_by(status="pending").order_by(cls.id.asc()).all()
+        return [row[0] for row in rows]
+
+    @classmethod
+    def status_counts(cls):
+        with F.app.app_context():
+            rows = F.db.session.query(cls.status, db.func.count(cls.id)).group_by(cls.status).all()
+        return {str(status or "unknown"): count for status, count in rows}
+
+    @classmethod
+    def archive_requested(cls):
+        with F.app.app_context():
+            rows = F.db.session.query(cls).filter_by(status="refresh_requested").all()
+            now = datetime.now()
+            for row in rows:
+                row.status = "archived"
+                row.updated_at = now
+            F.db.session.commit()
+        return len(rows)
 
     @classmethod
     def get(cls, row_id):

@@ -18,6 +18,8 @@
   <h4>판단 기준</h4>
   {{ macros.setting_input_int('http_timeout_seconds', 'Plex API 제한 시간(초)', value=arg['http_timeout_seconds'], min=1, max=15, desc=['상태 조회용 짧은 제한 시간입니다.']) }}
   {{ macros.setting_input_int('metadata_refresh_timeout_seconds', 'Metadata 갱신 제한 시간(초)', value=arg['metadata_refresh_timeout_seconds'], min=5, max=90, desc=['개별 metadata 갱신은 Plex 내부 처리를 기다리므로 별도 제한 시간을 사용합니다.', '기본값: 30초']) }}
+  {{ macros.setting_input_int('metadata_batch_interval_seconds', '전체 갱신 간격(초)', value=arg['metadata_batch_interval_seconds'], min=2, max=60, desc=['전체 갱신은 한 번에 한 항목만 요청한 뒤 이 시간만큼 기다립니다.', '기본값: 5초']) }}
+  {{ macros.setting_input_int('metadata_batch_ready_wait_seconds', '전체 갱신 안정화 대기(초)', value=arg['metadata_batch_ready_wait_seconds'], min=30, max=1800, desc=['각 요청 뒤 Plex가 BUSY이면 다음 요청을 보내지 않고 이 시간까지 기다립니다.', '기본값: 300초']) }}
   {{ macros.setting_input_int('agent_wait_threshold_seconds', 'SJVA 대기 경고 기준(초)', value=arg['agent_wait_threshold_seconds'], min=30, max=300) }}
   {{ macros.setting_input_int('timeout_threshold', '408/timeout 경고 횟수', value=arg['timeout_threshold'], min=1, max=10) }}
   {{ macros.setting_input_int('log_tail_bytes', '읽을 로그 크기(bytes)', value=arg['log_tail_bytes'], min=65536, max=5242880) }}

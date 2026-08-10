@@ -3,19 +3,50 @@
 <link rel="stylesheet" href="{{ url_for('plexmate_guard.static', filename='css/plexmate_guard.css') }}">
 <script>var PLEXMATE_GUARD_PACKAGE = 'plexmate_guard';</script>
 <script src="{{ url_for('plexmate_guard.static', filename='js/plexmate_guard.js') }}"></script>
-<div class="guard-toolbar"><button id="retry_refresh" class="btn btn-sm btn-secondary">새로고침</button><span class="guard-muted">정체 중 기록된 후보입니다. 안정화된 뒤 한 건씩만 갱신하세요. 요청이 시간 초과되면 Plex가 계속 처리 중일 수 있으므로 즉시 다시 누르지 마세요.</span></div>
-<div class="guard-section"><div id="retry_list"></div></div>
+<div class="guard-toolbar">
+  <button id="retry_refresh" class="btn btn-sm btn-secondary">새로고침</button>
+  <button id="batch_start" class="btn btn-sm btn-danger">대기 전체 갱신 시작</button>
+  <button id="batch_stop" class="btn btn-sm btn-outline-danger">전체 갱신 중지</button>
+  <button id="archive_requested" class="btn btn-sm btn-outline-primary">요청 완료 이력 보관</button>
+  <button id="history_toggle" class="btn btn-sm btn-outline-secondary">요청 이력 보기</button>
+</div>
+<div id="retry_notice" class="guard-notice">전체 갱신은 NORMAL 상태 및 Plexmate 제한 0에서만 시작하며, 한 항목씩 순차 요청합니다.</div>
+<div class="guard-section"><h5>전체 갱신 진행</h5><div id="batch_status" class="guard-muted">조회 중...</div></div>
+<div class="guard-section"><h5>대기 후보</h5><div id="retry_list"></div></div>
+<div class="guard-section" id="retry_history_section" style="display:none"><h5>요청 완료 이력</h5><div id="retry_history"></div></div>
 <script>
-function loadRetries() { guardAjax('main', 'retries', {}, function(ret) {
-  var root = $('#retry_list').empty(), rows = ret.data || [];
-  if (!rows.length) root.text('기록된 metadata 재시도 후보가 없습니다.');
-  rows.forEach(function(item) { var row = $('<div class="guard-retry"></div>');
-    row.append($('<strong></strong>').text('ratingKey ' + item.rating_key + ' · ' + item.status));
-    row.append($('<div class="guard-sub"></div>').text(item.agent || '-'));
-    row.append($('<div class="guard-path"></div>').text(item.media_path || '-'));
-    if (item.status === 'pending') { var b = $('<button class="btn btn-sm btn-primary">metadata 갱신 요청</button>'); b.click(function(){ if(confirm('이 항목만 Plex metadata 갱신을 요청할까요?')) guardAjax('main','retry_refresh',{id:item.id},loadRetries); }); row.append(b); }
-    root.append(row); });
-}); }
-$('#retry_refresh').click(function(e){e.preventDefault();loadRetries();}); $(document).ready(loadRetries);
+var showRetryHistory = false, batchPolling = null;
+function retryRow(item, allowAction) {
+  var row = $('<div class="guard-retry"></div>');
+  row.append($('<strong></strong>').text('ratingKey ' + item.rating_key + ' · ' + item.status));
+  row.append($('<div class="guard-sub"></div>').text(item.agent || '-'));
+  row.append($('<div class="guard-path"></div>').text(item.media_path || '-'));
+  if (item.requested_at) row.append($('<div class="guard-sub"></div>').text('요청 시각: ' + item.requested_at));
+  if (allowAction) { var b = $('<button class="btn btn-sm btn-primary">metadata 갱신 요청</button>'); b.click(function(){ if(confirm('이 항목만 Plex metadata 갱신을 요청할까요?')) guardAjax('main','retry_refresh',{id:item.id},loadRetries); }); row.append(b); }
+  return row;
+}
+function renderRetries(data) {
+  data = data || {}; var counts = data.counts || {}, batch = data.batch || {}, pending = data.pending || [], history = data.history || [];
+  var progress = '상태: ' + (batch.status || 'idle') + ' · 전체 ' + (batch.total || 0) + ' · 요청 완료 ' + (batch.completed || 0) + ' · 실패 ' + (batch.failed || 0) + (batch.current_id ? ' · 현재 #' + batch.current_id : '') + ' · ' + (batch.message || '-');
+  $('#batch_status').text(progress);
+  $('#retry_notice').text('대기 ' + (counts.pending || 0) + '건 · 요청 완료 ' + (counts.refresh_requested || 0) + '건 · 보관 ' + (counts.archived || 0) + '건. 전체 갱신은 NORMAL 상태 및 Plexmate 제한 0에서만 시작합니다.');
+  var running = !!batch.running, root = $('#retry_list').empty();
+  if (!pending.length) root.text('대기 중인 metadata 후보가 없습니다.');
+  pending.forEach(function(item) { root.append(retryRow(item, !running)); });
+  var historyRoot = $('#retry_history').empty();
+  if (!history.length) historyRoot.text('요청 완료 또는 보관 이력이 없습니다.');
+  history.forEach(function(item) { historyRoot.append(retryRow(item, false)); });
+  $('#batch_start').prop('disabled', running || !pending.length);
+  $('#batch_stop').prop('disabled', !running);
+  if (running && !batchPolling) batchPolling = setInterval(loadRetries, 3000);
+  if (!running && batchPolling) { clearInterval(batchPolling); batchPolling = null; }
+}
+function loadRetries() { guardAjax('main', 'retries', {}, function(ret) { renderRetries(ret.data); }); }
+$('#retry_refresh').click(function(e){e.preventDefault();loadRetries();});
+$('#batch_start').click(function(e){e.preventDefault();if(confirm('대기한 모든 후보를 한 항목씩 순차로 갱신 요청합니다. Plexmate 제한 0 및 Plex NORMAL 상태가 필요합니다. 시작할까요?'))guardAjax('main','batch_start',{},loadRetries);});
+$('#batch_stop').click(function(e){e.preventDefault();guardAjax('main','batch_stop',{},loadRetries);});
+$('#archive_requested').click(function(e){e.preventDefault();if(confirm('요청 완료 항목을 삭제하지 않고 이력으로 보관할까요?'))guardAjax('main','archive_requested',{},loadRetries);});
+$('#history_toggle').click(function(e){e.preventDefault();showRetryHistory=!showRetryHistory;$('#retry_history_section').toggle(showRetryHistory);$(this).text(showRetryHistory?'요청 이력 숨기기':'요청 이력 보기');});
+$(document).ready(loadRetries);
 </script>
 {% endblock %}
