@@ -1,8 +1,8 @@
 """Collection and manual-control service for Plexmate Guard.
 
-This module intentionally contains no Plex or FF restart operation.  It only
-observes, records a recommendation, and changes Plexmate's new-scan limit when
-the user presses a control in the Guard UI.
+This module has no automatic Plex or FF restart operation.  It observes,
+records recommendations, and only performs a Plex restart after an explicit
+two-step confirmation in the Guard UI.
 """
 
 import json
@@ -188,19 +188,94 @@ class PlexmateGuardService:
         control = "monitor_only"
         reason = ""
         if detected == "native":
+            synopkg = "/host/usr/syno/bin/synopkg"
+            if not os.path.exists(synopkg):
+                return {"selected": selected, "detected": detected, "native_present": native_present, "docker_candidate": docker_candidate, "control": control, "reason": "synopkg is not mounted in the FF container"}
+            control = "manual_available"
             try:
                 result = subprocess.run(["chroot", "/host", "/usr/syno/bin/synopkg", "status", "PlexMediaServer"], capture_output=True, text=True, timeout=4, check=False)
                 if '"status":"running"' in result.stdout:
-                    control = "preflight_needed"
+                    reason = "DSM package status: running"
                 else:
-                    reason = "DSM package control is not verified"
+                    reason = "DSM package status is not running or could not be read"
             except Exception as error:
-                reason = "synopkg_%s" % type(error).__name__
+                reason = "synopkg status check: %s (manual restart request is still available)" % type(error).__name__
         elif detected == "docker":
-            reason = "Docker control preflight is not implemented in v1"
+            if docker_candidate:
+                control = "manual_available"
+                reason = "Manual restart will target Docker container '%s'" % docker_name
+            else:
+                reason = "Docker socket or container name is not available"
         else:
             reason = "A single verified Plex deployment was not detected"
         return {"selected": selected, "detected": detected, "native_present": native_present, "docker_candidate": docker_candidate, "control": control, "reason": reason}
+
+    @staticmethod
+    def _command_text(result):
+        text = (result.stdout or "") + (result.stderr or "")
+        return " ".join(text.strip().split())[:500]
+
+    def manual_restart_preflight(self):
+        """Return a target only when a user-requested restart is safe to try.
+
+        This deliberately does not require a successful synopkg *status*
+        response. On some DSM versions it can time out while the package
+        manager can still accept a restart request. That response remains in
+        the dashboard and event history as diagnostic information.
+        """
+        current_limit = self._integer(self.current_scan_limit(), -1, 0, 20)
+        if current_limit != 0:
+            return {"success": False, "message": "먼저 Plexmate 신규 스캔 제한을 0으로 설정하세요.", "target": ""}
+
+        identity = self._request("/identity")
+        body = identity.get("body") or b""
+        if identity.get("status") == 503 and b"database migrations" in body.lower():
+            return {"success": False, "message": "Plex 데이터베이스 마이그레이션 중입니다. 완료될 때까지 재시작하지 않습니다.", "target": ""}
+
+        deployment = self.deployment()
+        if deployment["detected"] == "native" and deployment["control"] == "manual_available":
+            return {"success": True, "message": "Synology 네이티브 Plex 재시작을 요청할 수 있습니다.", "target": "native", "deployment": deployment}
+        if deployment["detected"] == "docker" and deployment["control"] == "manual_available":
+            return {"success": True, "message": "Docker Plex 재시작을 요청할 수 있습니다.", "target": "docker", "deployment": deployment}
+        return {"success": False, "message": "재시작 대상을 확인하지 못했습니다: %s" % (deployment.get("reason") or deployment.get("detected")), "target": "", "deployment": deployment}
+
+    def manual_restart(self, confirmed):
+        """Request exactly one user-confirmed Plex restart; never retry it."""
+        if not confirmed:
+            return {"success": False, "message": "재시작 확인이 필요합니다."}
+        preflight = self.manual_restart_preflight()
+        if not preflight.get("success"):
+            ModelGuardEvent.record("manual", "RESTART_BLOCKED", "preflight", preflight["message"], {"deployment": preflight.get("deployment", {})})
+            return preflight
+
+        target = preflight["target"]
+        try:
+            if target == "native":
+                command = ["chroot", "/host", "/usr/syno/bin/synopkg", "restart", "PlexMediaServer"]
+                result = subprocess.run(command, capture_output=True, text=True, timeout=45, check=False)
+                detail = self._command_text(result)
+                success = result.returncode == 0
+            else:
+                container = (P.ModelSetting.get("docker_container") or "").strip()
+                command = ["curl", "--silent", "--show-error", "--max-time", "30", "--unix-socket", "/host/var/run/docker.sock", "-o", "/dev/null", "-w", "%{http_code}", "-X", "POST", "http://localhost/containers/%s/restart?t=10" % urllib.parse.quote(container, safe="")]
+                result = subprocess.run(command, capture_output=True, text=True, timeout=35, check=False)
+                detail = self._command_text(result)
+                success = result.returncode == 0 and result.stdout.strip() == "204"
+            if success:
+                message = "Plex 재시작 요청을 전달했습니다. 1~2분 뒤 새로고침으로 상태를 확인하세요."
+                ModelGuardEvent.record("manual", "RESTART_REQUESTED", target, message, {"detail": detail, "deployment": preflight.get("deployment", {})})
+                return {"success": True, "message": message, "target": target}
+            message = "Plex 재시작 요청이 실패했습니다. 자동 재시도하지 않았습니다. %s" % (detail or "명령 실패")
+            ModelGuardEvent.record("manual", "RESTART_ERROR", target, message, {"detail": detail, "deployment": preflight.get("deployment", {})})
+            return {"success": False, "message": message, "target": target}
+        except subprocess.TimeoutExpired:
+            message = "Plex 재시작 명령의 응답 시간이 초과되었습니다. 자동 재시도하지 않았습니다. DSM 패키지 센터에서 상태를 확인하세요."
+            ModelGuardEvent.record("manual", "RESTART_TIMEOUT", target, message, {"deployment": preflight.get("deployment", {})})
+            return {"success": False, "message": message, "target": target}
+        except Exception as error:
+            message = "Plex 재시작 요청을 실행하지 못했습니다: %s" % type(error).__name__
+            ModelGuardEvent.record("manual", "RESTART_ERROR", target, message, {"deployment": preflight.get("deployment", {})})
+            return {"success": False, "message": message, "target": target}
 
     def decide_state(self, identity, logs):
         body = identity.get("body") or b""

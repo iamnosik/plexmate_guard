@@ -51,6 +51,8 @@ class ModuleMain(PluginModuleBase):
             elif command == "ack_restart":
                 ModelGuardEvent.record("manual", "RESTART_RECOMMENDATION", "acknowledged", "사용자가 재시작 권고를 확인했습니다.", {})
                 data = {"success": True, "message": "재시작 권고 확인을 기록했습니다. Plex 재시작은 사용자가 수행합니다."}
+            elif command == "manual_restart":
+                data = self.service.manual_restart(req.form.get("confirm") == "yes")
             elif command == "retries":
                 return jsonify({"ret": "success", "data": ModelMetadataRetry.recent()})
             elif command == "retry_refresh":

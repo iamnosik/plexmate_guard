@@ -15,8 +15,8 @@
 <div id="guard_notice" class="guard-notice"></div>
 <div id="guard_cards" class="guard-grid"></div>
 <div class="guard-section">
-  <div class="guard-section-heading"><h5>재시작 판단</h5><button id="guard_ack_restart" class="btn btn-sm btn-outline-warning">재시작 권고 확인</button></div>
-  <p id="guard_restart_text" class="guard-muted">Plex 재시작은 이 플러그인에서 실행하지 않습니다.</p>
+  <div class="guard-section-heading"><h5>재시작 판단</h5><div><button id="guard_ack_restart" class="btn btn-sm btn-outline-warning">권고 확인</button> <button id="guard_manual_restart" class="btn btn-sm btn-danger">Plex 수동 재시작</button></div></div>
+  <p id="guard_restart_text" class="guard-muted">자동 재시작은 하지 않습니다. 수동 재시작은 사용자의 확인 뒤 한 번만 요청합니다.</p>
 </div>
 <div class="guard-section"><h5>최근 SJVA 상태</h5><div id="guard_agents"></div></div>
 <div class="guard-section"><h5>실행 중인 Plex 작업</h5><pre id="guard_processes" class="guard-pre">조회 중...</pre></div>
@@ -50,10 +50,13 @@ function renderGuard(report) {
   var c = (pm.counts || {}); cards.append(guardCard('Plexmate 작업', 'R ' + (c.READY || 0) + ' · E ' + (c.ENQUEUE || 0) + ' · S ' + (c.SCANNING || 0)));
   cards.append(guardCard('Plex 설치', deploy.detected || '-', deploy.control === 'monitor_only' ? 'warn' : '', deploy.reason || ''));
   cards.append(guardCard('NAS Load', (host.load || []).join(' / '), ''));
+  var manualAvailable = deploy.control === 'manual_available' && String(report.actual_limit) === '0';
   var restart = report.state === 'METADATA_BLOCKED'
-    ? '메타데이터 정체가 감지되었습니다. Plexmate 유입을 먼저 멈춘 뒤 사용자가 Plex 재시작 여부를 결정하세요.'
-    : '자동 재시작은 비활성화되어 있습니다. 재시작은 사용자가 수행합니다.';
+    ? '메타데이터 정체가 감지되었습니다. Plexmate 유입을 멈춘 뒤 필요하면 수동 재시작을 요청하세요.'
+    : '자동 재시작은 하지 않습니다. 수동 버튼은 Plexmate 제한이 0일 때만 사용할 수 있습니다.';
+  if (!manualAvailable) restart += ' 현재 재시작 조건: ' + (String(report.actual_limit) !== '0' ? 'Plexmate 제한을 0으로 설정' : (deploy.reason || '대상 확인 필요'));
   $('#guard_restart_text').text(restart);
+  $('#guard_manual_restart').prop('disabled', !manualAvailable);
   var agents = $('#guard_agents').empty();
   if (!(log.agent_waits || []).length) agents.text('최근 대기 신호가 없습니다.');
   (log.agent_waits || []).forEach(function(item) { agents.append($('<div class="guard-agent"></div>').text(item.agent + ' · ' + item.seconds + '초 대기 · Req#' + item.request)); });
@@ -66,6 +69,12 @@ $('#guard_limit_one').click(function(e) { e.preventDefault(); guardAjax('main', 
 $('#guard_resume_one').click(function(e) { e.preventDefault(); guardAjax('main', 'resume_one', {}, loadGuard); });
 $('#guard_restore').click(function(e) { e.preventDefault(); if (confirm('저장된 기본 실행 수로 복원합니다.')) guardAjax('main', 'restore_baseline', {}, loadGuard); });
 $('#guard_ack_restart').click(function(e) { e.preventDefault(); guardAjax('main', 'ack_restart', {}, loadGuard); });
+$('#guard_manual_restart').click(function(e) {
+  e.preventDefault();
+  if (!confirm('Plex를 재시작합니다. 진행 중인 Plex 스캔과 metadata 작업은 중단될 수 있습니다. 계속할까요?')) return;
+  if (!confirm('자동 재시작이 아닙니다. 지금 한 번만 Plex 재시작 요청을 보낼까요?')) return;
+  guardAjax('main', 'manual_restart', {confirm: 'yes'}, loadGuard);
+});
 $(document).ready(loadGuard);
 </script>
 {% endblock %}

@@ -10,7 +10,7 @@
   {{ macros.setting_input_text('main_interval', '관찰 주기', value=arg['main_interval'], desc=['분 단위 또는 Cron 형식', '기본값: 2']) }}
   {{ macros.m_hr() }}
   <h4>Plex 설치 방식</h4>
-  {{ macros.setting_select('deployment_mode', '설치 방식', [['auto','자동 감지'], ['native','Synology 네이티브'], ['docker','Docker'], ['external','외부 서버(감시만)']], value=arg['deployment_mode'], desc=['감시는 모든 방식에서 가능하지만 자동 재시작은 1차에서 지원하지 않습니다.']) }}
+  {{ macros.setting_select('deployment_mode', '설치 방식', [['auto','자동 감지'], ['native','Synology 네이티브'], ['docker','Docker'], ['external','외부 서버(감시만)']], value=arg['deployment_mode'], desc=['자동 재시작은 지원하지 않습니다.', '대시보드 수동 재시작은 사용자가 두 번 확인한 경우에만 한 번 요청합니다.']) }}
   {{ macros.setting_input_text('docker_container', 'Docker 컨테이너 ID/이름', value=arg['docker_container'], desc=['Docker Plex를 명시적으로 선택한 경우에만 입력하세요.']) }}
   {{ macros.setting_input_text('plex_log_path', 'Plex 로그 파일 경로', value=arg['plex_log_path'], desc=['FF 컨테이너에서 보이는 경로입니다.', '큐·SJVA 대기·408 분석에 사용합니다.']) }}
   {{ macros.m_hr() }}
