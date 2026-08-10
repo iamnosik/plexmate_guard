@@ -1,0 +1,30 @@
+{% extends "base.html" %}
+{% block content %}
+<script>var PLEXMATE_GUARD_PACKAGE = 'plexmate_guard';</script>
+<script src="{{ url_for('plexmate_guard.static', filename='js/plexmate_guard.js') }}"></script>
+{{ macros.m_button_group([['setting_save_btn', '설정 저장'], ['guard_connection_test_btn', 'Plex 연결 테스트'], ['guard_deployment_detect_btn', '설치 방식 감지']]) }}
+<form id="setting">
+  <h4>운영 모드</h4>
+  {{ macros.setting_checkbox('guard_enabled', 'Guard 사용', value=arg['guard_enabled'], desc=['ON이면 설정한 주기로 상태를 기록합니다.', '1차 버전은 자동 일시정지·자동 재시작을 수행하지 않습니다.']) }}
+  {{ macros.setting_checkbox('main_auto_start', '자동 관찰 실행', value=arg['main_auto_start'], desc=['Guard 사용 ON일 때만 동작합니다.']) }}
+  {{ macros.setting_input_text('main_interval', '관찰 주기', value=arg['main_interval'], desc=['분 단위 또는 Cron 형식', '기본값: 2']) }}
+  {{ macros.m_hr() }}
+  <h4>Plex 설치 방식</h4>
+  {{ macros.setting_select('deployment_mode', '설치 방식', [['auto','자동 감지'], ['native','Synology 네이티브'], ['docker','Docker'], ['external','외부 서버(감시만)']], value=arg['deployment_mode'], desc=['감시는 모든 방식에서 가능하지만 자동 재시작은 1차에서 지원하지 않습니다.']) }}
+  {{ macros.setting_input_text('docker_container', 'Docker 컨테이너 ID/이름', value=arg['docker_container'], desc=['Docker Plex를 명시적으로 선택한 경우에만 입력하세요.']) }}
+  {{ macros.setting_input_text('plex_log_path', 'Plex 로그 파일 경로', value=arg['plex_log_path'], desc=['FF 컨테이너에서 보이는 경로입니다.', '큐·SJVA 대기·408 분석에 사용합니다.']) }}
+  {{ macros.m_hr() }}
+  <h4>판단 기준</h4>
+  {{ macros.setting_input_int('http_timeout_seconds', 'Plex API 제한 시간(초)', value=arg['http_timeout_seconds'], min=1, max=15) }}
+  {{ macros.setting_input_int('agent_wait_threshold_seconds', 'SJVA 대기 경고 기준(초)', value=arg['agent_wait_threshold_seconds'], min=30, max=300) }}
+  {{ macros.setting_input_int('timeout_threshold', '408/timeout 경고 횟수', value=arg['timeout_threshold'], min=1, max=10) }}
+  {{ macros.setting_input_int('log_tail_bytes', '읽을 로그 크기(bytes)', value=arg['log_tail_bytes'], min=65536, max=5242880) }}
+  {{ macros.m_hr() }}
+  <h4>Plexmate 제어</h4>
+  {{ macros.setting_input_int('baseline_scan_limit', '기본 실행 수', value=arg['baseline_scan_limit'], min=1, max=20, desc=['기본값 복원 버튼이 이 값으로 신규 스캔 제한을 되돌립니다.']) }}
+</form>
+<script>
+$('#guard_connection_test_btn').click(function(e){e.preventDefault();guardAjax('setting','connection_test',{},function(ret){ if(ret.data) alert('HTTP '+ret.data.status+' · '+ret.data.latency_ms+'ms'); });});
+$('#guard_deployment_detect_btn').click(function(e){e.preventDefault();guardAjax('setting','deployment_detect',{},function(ret){ if(ret.data) alert('감지: '+ret.data.detected+'\n제어: '+ret.data.control+'\n'+(ret.data.reason||'')); });});
+</script>
+{% endblock %}

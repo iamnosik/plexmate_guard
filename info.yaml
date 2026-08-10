@@ -1,0 +1,13 @@
+title: "Plexmate Guard"
+version: "0.1.0"
+package_name: "plexmate_guard"
+developer: "iamnosik"
+description: "Plex 메타데이터 정체를 관찰하고 Plexmate 스캔 유입을 안전하게 수동 제어합니다."
+home: "https://github.com/iamnosik/plexmate_guard"
+more: "https://raw.githubusercontent.com/iamnosik/plexmate_guard/main/README.md"
+
+require_plugin: "plex_mate"
+require_os: ""
+need_decrypt_code: false
+need_filesize_check: false
+filesize: 0

@@ -1,0 +1,11 @@
+{% extends "base.html" %}
+{% block content %}
+<link rel="stylesheet" href="{{ url_for('plexmate_guard.static', filename='css/plexmate_guard.css') }}">
+<script>var PLEXMATE_GUARD_PACKAGE = 'plexmate_guard';</script>
+<script src="{{ url_for('plexmate_guard.static', filename='js/plexmate_guard.js') }}"></script>
+<div class="guard-toolbar"><button id="history_refresh" class="btn btn-sm btn-secondary">새로고침</button></div><div class="guard-section"><div id="history_list"></div></div>
+<script>
+function loadHistory(){guardAjax('main','history',{limit:100},function(ret){var root=$('#history_list').empty(), rows=ret.data||[]; if(!rows.length)root.text('판단 이력이 없습니다.'); rows.forEach(function(item){var row=$('<div class="guard-history"></div>');row.append($('<strong></strong>').text(item.created_at+' · '+item.state+' · '+item.action));row.append($('<div class="guard-sub"></div>').text(item.message||''));root.append(row);});});}
+$('#history_refresh').click(function(e){e.preventDefault();loadHistory();});$(document).ready(loadHistory);
+</script>
+{% endblock %}

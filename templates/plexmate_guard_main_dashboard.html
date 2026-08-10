@@ -1,0 +1,71 @@
+{% extends "base.html" %}
+{% block content %}
+<link rel="stylesheet" href="{{ url_for('plexmate_guard.static', filename='css/plexmate_guard.css') }}">
+<script>var PLEXMATE_GUARD_PACKAGE = 'plexmate_guard';</script>
+<script src="{{ url_for('plexmate_guard.static', filename='js/plexmate_guard.js') }}"></script>
+
+<div class="guard-toolbar">
+  <button id="guard_refresh" class="btn btn-sm btn-secondary">새로고침</button>
+  <button id="guard_pause" class="btn btn-sm btn-danger">Plexmate 일시정지 (0)</button>
+  <button id="guard_limit_one" class="btn btn-sm btn-warning">1개로 제한</button>
+  <button id="guard_resume_one" class="btn btn-sm btn-primary">1개로 재개</button>
+  <button id="guard_restore" class="btn btn-sm btn-outline-primary">기본값 복원</button>
+  <span id="guard_generated" class="guard-muted"></span>
+</div>
+<div id="guard_notice" class="guard-notice"></div>
+<div id="guard_cards" class="guard-grid"></div>
+<div class="guard-section">
+  <div class="guard-section-heading"><h5>재시작 판단</h5><button id="guard_ack_restart" class="btn btn-sm btn-outline-warning">재시작 권고 확인</button></div>
+  <p id="guard_restart_text" class="guard-muted">Plex 재시작은 이 플러그인에서 실행하지 않습니다.</p>
+</div>
+<div class="guard-section"><h5>최근 SJVA 상태</h5><div id="guard_agents"></div></div>
+<div class="guard-section"><h5>실행 중인 Plex 작업</h5><pre id="guard_processes" class="guard-pre">조회 중...</pre></div>
+
+<script>
+function guardCard(label, value, tone, sub) {
+  var card = $('<div class="guard-card"></div>');
+  card.append($('<div class="guard-label"></div>').text(label));
+  card.append($('<div class="guard-value"></div>').addClass(tone || '').text(value == null || value === '' ? '-' : value));
+  if (sub) card.append($('<div class="guard-sub"></div>').text(sub));
+  return card;
+}
+function guardStateTone(state) {
+  if (state === 'NORMAL') return 'good';
+  if (state === 'METADATA_BLOCKED' || state === 'PLEX_UNAVAILABLE') return 'bad';
+  if (state === 'BUSY' || state === 'MIGRATION') return 'warn';
+  return '';
+}
+function renderGuard(report) {
+  $('#guard_generated').text('마지막 조회 ' + (report.generated_at || '-'));
+  $('#guard_notice').text((report.state || 'UNKNOWN') + ' · ' + (report.message || '')).attr('data-state', report.state || 'UNKNOWN');
+  var log = report.logs || {}, pm = report.plexmate || {}, deploy = report.deployment || {}, host = report.host || {};
+  var cards = $('#guard_cards').empty();
+  cards.append(guardCard('Guard', report.guard_enabled ? '사용' : '꺼짐', report.guard_enabled ? 'good' : 'warn'));
+  cards.append(guardCard('현재 상태', report.state, guardStateTone(report.state)));
+  cards.append(guardCard('Plex 응답', (report.identity || {}).status + ' · ' + ((report.identity || {}).latency_ms || '-') + 'ms', (report.identity || {}).ok ? 'good' : 'bad'));
+  cards.append(guardCard('Metadata 큐', log.queue, log.queue_delta_10m == null ? '' : (log.queue_delta_10m > 0 ? 'bad' : 'good'), log.queue_delta_10m == null ? '로그 기준 추세 없음' : '10분 변화 ' + log.queue_delta_10m));
+  cards.append(guardCard('SJVA 최대 대기', (log.max_wait_seconds || 0) + '초', log.max_wait_seconds >= 60 ? 'bad' : ''));
+  cards.append(guardCard('최근 408/timeout', log.timeout_count || 0, log.timeout_count >= 2 ? 'bad' : ''));
+  cards.append(guardCard('Plexmate 제한', '목표 ' + (report.desired_limit || '-') + ' / 실제 ' + (report.actual_limit || '-'), report.desired_limit && String(report.desired_limit) !== String(report.actual_limit) ? 'warn' : ''));
+  var c = (pm.counts || {}); cards.append(guardCard('Plexmate 작업', 'R ' + (c.READY || 0) + ' · E ' + (c.ENQUEUE || 0) + ' · S ' + (c.SCANNING || 0)));
+  cards.append(guardCard('Plex 설치', deploy.detected || '-', deploy.control === 'monitor_only' ? 'warn' : '', deploy.reason || ''));
+  cards.append(guardCard('NAS Load', (host.load || []).join(' / '), ''));
+  var restart = report.state === 'METADATA_BLOCKED'
+    ? '메타데이터 정체가 감지되었습니다. Plexmate 유입을 먼저 멈춘 뒤 사용자가 Plex 재시작 여부를 결정하세요.'
+    : '자동 재시작은 비활성화되어 있습니다. 재시작은 사용자가 수행합니다.';
+  $('#guard_restart_text').text(restart);
+  var agents = $('#guard_agents').empty();
+  if (!(log.agent_waits || []).length) agents.text('최근 대기 신호가 없습니다.');
+  (log.agent_waits || []).forEach(function(item) { agents.append($('<div class="guard-agent"></div>').text(item.agent + ' · ' + item.seconds + '초 대기 · Req#' + item.request)); });
+  $('#guard_processes').text(((report.processes || {}).rows || []).join('\n') || '실행 중인 Plex Scanner/Server 작업을 찾지 못했습니다.');
+}
+function loadGuard() { guardAjax('main', 'report', {}, function(ret) { if (ret.data) renderGuard(ret.data); }); }
+$('#guard_refresh').click(function(e) { e.preventDefault(); loadGuard(); });
+$('#guard_pause').click(function(e) { e.preventDefault(); if (confirm('새 Plexmate 스캔 시작을 멈춥니다. 진행 중인 스캔은 종료하지 않습니다.')) guardAjax('main', 'pause', {}, loadGuard); });
+$('#guard_limit_one').click(function(e) { e.preventDefault(); guardAjax('main', 'limit_one', {}, loadGuard); });
+$('#guard_resume_one').click(function(e) { e.preventDefault(); guardAjax('main', 'resume_one', {}, loadGuard); });
+$('#guard_restore').click(function(e) { e.preventDefault(); if (confirm('저장된 기본 실행 수로 복원합니다.')) guardAjax('main', 'restore_baseline', {}, loadGuard); });
+$('#guard_ack_restart').click(function(e) { e.preventDefault(); guardAjax('main', 'ack_restart', {}, loadGuard); });
+$(document).ready(loadGuard);
+</script>
+{% endblock %}
