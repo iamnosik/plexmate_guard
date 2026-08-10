@@ -72,6 +72,19 @@ class ModelMetadataRetry(ModelBase):
         return len(rows)
 
     @classmethod
+    def archive_pending(cls, row_id, reason="user_archived"):
+        """Hide one stale candidate without touching Plex or its media file."""
+        with F.app.app_context():
+            row = F.db.session.query(cls).filter_by(id=int(row_id), status="pending").first()
+            if row is None:
+                return None
+            row.status = "archived"
+            row.reason = str(reason or "user_archived")[:255]
+            row.updated_at = datetime.now()
+            F.db.session.commit()
+            return row.to_dict()
+
+    @classmethod
     def get(cls, row_id):
         with F.app.app_context():
             return F.db.session.query(cls).filter_by(id=int(row_id)).first()

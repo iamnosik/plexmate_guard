@@ -30,7 +30,7 @@ class PlexmateGuardService:
         self._batch_thread = None
         self._batch_state = {
             "status": "idle", "total": 0, "completed": 0, "unconfirmed": 0,
-            "failed": 0, "current_id": None, "message": "대기 중", "started_at": None,
+            "failed": 0, "skipped": 0, "current_id": None, "message": "대기 중", "started_at": None,
         }
 
     @staticmethod
@@ -425,7 +425,7 @@ class PlexmateGuardService:
             return {"success": False, "message": "전체 갱신할 대기 후보가 없습니다."}
 
         self._batch_stop.clear()
-        self._set_batch_state(status="running", total=len(item_ids), completed=0, unconfirmed=0, failed=0, current_id=None, message="순차 갱신을 시작했습니다.", started_at=datetime.now().isoformat(timespec="seconds"))
+        self._set_batch_state(status="running", total=len(item_ids), completed=0, unconfirmed=0, failed=0, skipped=0, current_id=None, message="순차 갱신을 시작했습니다.", started_at=datetime.now().isoformat(timespec="seconds"))
         self._batch_thread = threading.Thread(target=self._batch_worker, args=(item_ids,), daemon=True, name="plexmate-guard-metadata-batch")
         self._batch_thread.start()
         ModelGuardEvent.record("manual", "METADATA_BATCH", "start", "전체 metadata 순차 갱신을 시작했습니다.", {"total": len(item_ids)})
@@ -491,6 +491,19 @@ class PlexmateGuardService:
             if status == "refresh_requested":
                 self._set_batch_state(completed=state["completed"] + 1, current_id=None, message="요청 완료")
                 P.logger.info("GUARD_METADATA_BATCH result=requested retry_id=%s", retry_id)
+            elif result.get("http_status") == 404:
+                archived = ModelMetadataRetry.archive_pending(retry_id, "plex_item_missing_http_404")
+                if archived is None:
+                    self._batch_pause("404 응답 후보를 이력 보관하지 못했습니다. 목록을 새로고침해 확인하세요.")
+                    return
+                state = self.batch_status()
+                message = "Plex에서 사라진 후보 1건(HTTP 404)을 이력으로 보관하고 다음 항목을 처리합니다."
+                self._set_batch_state(skipped=state.get("skipped", 0) + 1, current_id=None, message=message)
+                ModelGuardEvent.record("batch", "METADATA_BATCH", "skip_404", message, {
+                    "retry_id": retry_id,
+                    "rating_key": archived.get("rating_key"),
+                })
+                P.logger.warning("GUARD_METADATA_BATCH result=skip_404 retry_id=%s rating_key=%s", retry_id, archived.get("rating_key"))
             else:
                 message = result.get("message") or "metadata 요청 실패"
                 self._set_batch_state(status="paused", failed=state["failed"] + 1, current_id=None, message=message)
@@ -514,6 +527,21 @@ class PlexmateGuardService:
         ModelGuardEvent.record("manual", "METADATA_ARCHIVE", "archive_requested", message, {"count": count})
         P.logger.info("GUARD_METADATA_ARCHIVE archived=%s", count)
         return {"success": True, "message": message, "count": count}
+
+    def archive_pending_metadata(self, retry_id):
+        status = self.batch_status()
+        if status.get("running"):
+            return {"success": False, "message": "전체 갱신이 실행 중일 때는 후보를 보관할 수 없습니다. 먼저 중지하거나 완료될 때까지 기다리세요."}
+        row = ModelMetadataRetry.archive_pending(retry_id)
+        if row is None:
+            return {"success": False, "message": "대기 중인 후보를 찾지 못했습니다. 목록을 새로고침해 확인하세요."}
+        message = "Plex·파일·Plex DB는 삭제하지 않고 Guard 후보만 이력으로 보관했습니다."
+        ModelGuardEvent.record("manual", "METADATA_ARCHIVE", "archive_pending", message, {
+            "retry_id": row.get("id"),
+            "rating_key": row.get("rating_key"),
+        })
+        P.logger.info("GUARD_METADATA_ARCHIVE result=pending retry_id=%s rating_key=%s", row.get("id"), row.get("rating_key"))
+        return {"success": True, "message": message, "item": row}
 
     def request_metadata_refresh(self, retry_id):
         row = ModelMetadataRetry.get(retry_id)
@@ -541,14 +569,19 @@ class PlexmateGuardService:
             message = "선택한 항목의 Plex metadata 갱신을 요청했습니다."
             ModelGuardEvent.record("manual", "METADATA_RETRY", "refresh_request", message, payload)
             P.logger.info("GUARD_METADATA_REFRESH result=accepted rating_key=%s http=%s latency_ms=%s timeout_s=%s", row.rating_key, response.get("status"), response.get("latency_ms"), timeout_seconds)
-            return {"success": True, "message": message}
+            return {"success": True, "message": message, "http_status": response.get("status")}
         if response.get("status") == 0 and response.get("error") in ("TimeoutError", "socket.timeout"):
             row.mark_requested()
             message = "metadata 갱신 요청이 %s초 안에 응답하지 않았습니다. Plex가 계속 처리 중일 수 있어 중복 요청은 막았습니다. 1~2분 뒤 대시보드와 Plex 로그를 확인하세요." % timeout_seconds
             ModelGuardEvent.record("manual", "METADATA_RETRY_UNCONFIRMED", "refresh_timeout", message, payload)
             P.logger.warning("GUARD_METADATA_REFRESH result=unconfirmed rating_key=%s error=%s timeout_s=%s", row.rating_key, response.get("error"), timeout_seconds)
-            return {"success": False, "message": message}
+            return {"success": False, "message": message, "http_status": response.get("status")}
+        if response.get("status") == 404:
+            message = "Plex에서 이 ratingKey를 찾지 못했습니다(HTTP 404). 파일을 삭제하지 않았습니다. 후보 이력 보관 후 다음 항목을 처리할 수 있습니다."
+            ModelGuardEvent.record("manual", "METADATA_RETRY_MISSING", "http_404", message, payload)
+            P.logger.warning("GUARD_METADATA_REFRESH result=missing rating_key=%s http=404 latency_ms=%s", row.rating_key, response.get("latency_ms"))
+            return {"success": False, "message": message, "http_status": 404}
         message = "metadata 갱신 요청에 실패했습니다: HTTP %s (%s)" % (response.get("status"), response.get("error") or "unknown")
         ModelGuardEvent.record("manual", "METADATA_RETRY_ERROR", "refresh_request", message, payload)
         P.logger.warning("GUARD_METADATA_REFRESH result=error rating_key=%s http=%s error=%s latency_ms=%s", row.rating_key, response.get("status"), response.get("error") or "-", response.get("latency_ms"))
-        return {"success": False, "message": message}
+        return {"success": False, "message": message, "http_status": response.get("status")}

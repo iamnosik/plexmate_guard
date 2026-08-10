@@ -70,6 +70,8 @@ class ModuleMain(PluginModuleBase):
                 data = self.service.stop_metadata_batch()
             elif command == "archive_requested":
                 data = self.service.archive_requested_metadata()
+            elif command == "archive_pending":
+                data = self.service.archive_pending_metadata(req.form.get("id"))
             elif command == "retry_refresh":
                 data = self.service.request_metadata_refresh(req.form.get("id"))
             elif command == "history":

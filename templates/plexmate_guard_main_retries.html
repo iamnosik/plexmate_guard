@@ -21,13 +21,21 @@ function retryRow(item, allowAction) {
   row.append($('<strong></strong>').text('ratingKey ' + item.rating_key + ' · ' + item.status));
   row.append($('<div class="guard-sub"></div>').text(item.agent || '-'));
   row.append($('<div class="guard-path"></div>').text(item.media_path || '-'));
+  if (item.reason) row.append($('<div class="guard-sub"></div>').text('사유: ' + item.reason));
   if (item.requested_at) row.append($('<div class="guard-sub"></div>').text('요청 시각: ' + item.requested_at));
-  if (allowAction) { var b = $('<button class="btn btn-sm btn-primary">metadata 갱신 요청</button>'); b.click(function(){ if(confirm('이 항목만 Plex metadata 갱신을 요청할까요?')) guardAjax('main','retry_refresh',{id:item.id},loadRetries); }); row.append(b); }
+  if (allowAction) {
+    var b = $('<button class="btn btn-sm btn-primary">metadata 갱신 요청</button>');
+    b.click(function(){ if(confirm('이 항목만 Plex metadata 갱신을 요청할까요?')) guardAjax('main','retry_refresh',{id:item.id},loadRetries); });
+    row.append(b);
+    var archive = $('<button class="btn btn-sm btn-outline-secondary ml-2">후보 이력 보관</button>');
+    archive.click(function(){ if(confirm('Plex·파일·Plex DB는 삭제하지 않고 이 Guard 후보만 목록에서 제외해 이력으로 보관할까요?')) guardAjax('main','archive_pending',{id:item.id},loadRetries); });
+    row.append(archive);
+  }
   return row;
 }
 function renderRetries(data) {
   data = data || {}; var counts = data.counts || {}, batch = data.batch || {}, pending = data.pending || [], history = data.history || [];
-  var progress = '상태: ' + (batch.status || 'idle') + ' · 전체 ' + (batch.total || 0) + ' · 요청 완료 ' + (batch.completed || 0) + ' · 실패 ' + (batch.failed || 0) + (batch.current_id ? ' · 현재 #' + batch.current_id : '') + ' · ' + (batch.message || '-');
+  var progress = '상태: ' + (batch.status || 'idle') + ' · 전체 ' + (batch.total || 0) + ' · 요청 완료 ' + (batch.completed || 0) + ' · 404 건너뜀 ' + (batch.skipped || 0) + ' · 실패 ' + (batch.failed || 0) + (batch.current_id ? ' · 현재 #' + batch.current_id : '') + ' · ' + (batch.message || '-');
   $('#batch_status').text(progress);
   $('#retry_notice').text('대기 ' + (counts.pending || 0) + '건 · 요청 완료 ' + (counts.refresh_requested || 0) + '건 · 보관 ' + (counts.archived || 0) + '건. 전체 갱신은 NORMAL 상태 및 Plexmate 제한 0에서만 시작합니다.');
   var running = !!batch.running, root = $('#retry_list').empty();
