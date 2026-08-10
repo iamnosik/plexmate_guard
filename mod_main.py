@@ -20,6 +20,7 @@ class ModuleMain(PluginModuleBase):
             "docker_container": "",
             "plex_log_path": "/host/volume1/PlexMediaServer/AppData/Plex Media Server/Logs/Plex Media Server.log",
             "http_timeout_seconds": "3",
+            "metadata_refresh_timeout_seconds": "30",
             "log_tail_bytes": "1048576",
             "agent_wait_threshold_seconds": "60",
             "timeout_threshold": "2",

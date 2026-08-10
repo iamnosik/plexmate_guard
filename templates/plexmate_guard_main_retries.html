@@ -3,7 +3,7 @@
 <link rel="stylesheet" href="{{ url_for('plexmate_guard.static', filename='css/plexmate_guard.css') }}">
 <script>var PLEXMATE_GUARD_PACKAGE = 'plexmate_guard';</script>
 <script src="{{ url_for('plexmate_guard.static', filename='js/plexmate_guard.js') }}"></script>
-<div class="guard-toolbar"><button id="retry_refresh" class="btn btn-sm btn-secondary">새로고침</button><span class="guard-muted">정체 중 기록된 후보입니다. 안정화된 뒤 한 건씩만 갱신하세요.</span></div>
+<div class="guard-toolbar"><button id="retry_refresh" class="btn btn-sm btn-secondary">새로고침</button><span class="guard-muted">정체 중 기록된 후보입니다. 안정화된 뒤 한 건씩만 갱신하세요. 요청이 시간 초과되면 Plex가 계속 처리 중일 수 있으므로 즉시 다시 누르지 마세요.</span></div>
 <div class="guard-section"><div id="retry_list"></div></div>
 <script>
 function loadRetries() { guardAjax('main', 'retries', {}, function(ret) {

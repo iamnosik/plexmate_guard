@@ -16,7 +16,8 @@
   {{ macros.setting_input_text('plex_log_path', 'Plex 로그 파일 경로', value=arg['plex_log_path'], desc=['FF 컨테이너에서 보이는 경로입니다.', '큐·SJVA 대기·408 분석에 사용합니다.']) }}
   {{ macros.m_hr() }}
   <h4>판단 기준</h4>
-  {{ macros.setting_input_int('http_timeout_seconds', 'Plex API 제한 시간(초)', value=arg['http_timeout_seconds'], min=1, max=15) }}
+  {{ macros.setting_input_int('http_timeout_seconds', 'Plex API 제한 시간(초)', value=arg['http_timeout_seconds'], min=1, max=15, desc=['상태 조회용 짧은 제한 시간입니다.']) }}
+  {{ macros.setting_input_int('metadata_refresh_timeout_seconds', 'Metadata 갱신 제한 시간(초)', value=arg['metadata_refresh_timeout_seconds'], min=5, max=90, desc=['개별 metadata 갱신은 Plex 내부 처리를 기다리므로 별도 제한 시간을 사용합니다.', '기본값: 30초']) }}
   {{ macros.setting_input_int('agent_wait_threshold_seconds', 'SJVA 대기 경고 기준(초)', value=arg['agent_wait_threshold_seconds'], min=30, max=300) }}
   {{ macros.setting_input_int('timeout_threshold', '408/timeout 경고 횟수', value=arg['timeout_threshold'], min=1, max=10) }}
   {{ macros.setting_input_int('log_tail_bytes', '읽을 로그 크기(bytes)', value=arg['log_tail_bytes'], min=65536, max=5242880) }}

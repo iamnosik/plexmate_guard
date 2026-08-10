@@ -399,10 +399,33 @@ class PlexmateGuardService:
         snapshot = self.collect("retry_preflight")
         if snapshot["state"] in ("METADATA_BLOCKED", "MIGRATION", "PLEX_UNAVAILABLE"):
             return {"success": False, "message": "현재 Plex 상태에서는 metadata 재시도를 실행하지 않습니다."}
-        response = self._request("/library/metadata/%s/refresh" % urllib.parse.quote(str(row.rating_key)), method="PUT")
+        timeout_seconds = self._integer(P.ModelSetting.get("metadata_refresh_timeout_seconds"), 30, 5, 90)
+        response = self._request(
+            "/library/metadata/%s/refresh" % urllib.parse.quote(str(row.rating_key)),
+            timeout=timeout_seconds,
+            method="PUT",
+        )
+        payload = {
+            "retry_id": row.id,
+            "rating_key": row.rating_key,
+            "http_status": response.get("status"),
+            "latency_ms": response.get("latency_ms"),
+            "error": response.get("error") or "",
+            "timeout_seconds": timeout_seconds,
+        }
         if response.get("ok"):
             row.mark_requested()
             message = "선택한 항목의 Plex metadata 갱신을 요청했습니다."
-            ModelGuardEvent.record("manual", "METADATA_RETRY", "refresh_request", message, {"retry_id": row.id, "rating_key": row.rating_key})
+            ModelGuardEvent.record("manual", "METADATA_RETRY", "refresh_request", message, payload)
+            P.logger.info("GUARD_METADATA_REFRESH result=accepted rating_key=%s http=%s latency_ms=%s timeout_s=%s", row.rating_key, response.get("status"), response.get("latency_ms"), timeout_seconds)
             return {"success": True, "message": message}
-        return {"success": False, "message": "metadata 갱신 요청에 실패했습니다: HTTP %s" % response.get("status")}
+        if response.get("status") == 0 and response.get("error") in ("TimeoutError", "socket.timeout"):
+            row.mark_requested()
+            message = "metadata 갱신 요청이 %s초 안에 응답하지 않았습니다. Plex가 계속 처리 중일 수 있어 중복 요청은 막았습니다. 1~2분 뒤 대시보드와 Plex 로그를 확인하세요." % timeout_seconds
+            ModelGuardEvent.record("manual", "METADATA_RETRY_UNCONFIRMED", "refresh_timeout", message, payload)
+            P.logger.warning("GUARD_METADATA_REFRESH result=unconfirmed rating_key=%s error=%s timeout_s=%s", row.rating_key, response.get("error"), timeout_seconds)
+            return {"success": False, "message": message}
+        message = "metadata 갱신 요청에 실패했습니다: HTTP %s (%s)" % (response.get("status"), response.get("error") or "unknown")
+        ModelGuardEvent.record("manual", "METADATA_RETRY_ERROR", "refresh_request", message, payload)
+        P.logger.warning("GUARD_METADATA_REFRESH result=error rating_key=%s http=%s error=%s latency_ms=%s", row.rating_key, response.get("status"), response.get("error") or "-", response.get("latency_ms"))
+        return {"success": False, "message": message}
