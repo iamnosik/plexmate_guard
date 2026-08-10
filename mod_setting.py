@@ -16,8 +16,34 @@ class ModuleSetting(PluginModuleBase):
     def process_menu(self, page, req):
         return render_template(f"{P.package_name}_{self.name}.html", arg=P.ModelSetting.to_dict())
 
+    def _sync_guard_scheduler(self):
+        try:
+            P.logic.scheduler_stop("main")
+        except Exception:
+            pass
+        if P.ModelSetting.get_bool("guard_enabled") and P.ModelSetting.get_bool("main_auto_start"):
+            P.logic.scheduler_start("main")
+
     def process_ajax(self, command, req):
         try:
+            if command == "operation_mode_save":
+                changed = []
+                for key in ("guard_enabled", "main_auto_start", "detailed_log_enabled"):
+                    value = "True" if str(req.form.get(key, "False")).lower() in ("true", "1", "on", "yes") else "False"
+                    if P.ModelSetting.get(key) != value:
+                        P.ModelSetting.set(key, value)
+                        changed.append(key)
+                self._sync_guard_scheduler()
+                P.logger.info(
+                    "GUARD_MODE_SAVED changed=%s guard_enabled=%s main_auto_start=%s detailed_log=%s",
+                    ",".join(changed) or "-", P.ModelSetting.get("guard_enabled"),
+                    P.ModelSetting.get("main_auto_start"), P.ModelSetting.get("detailed_log_enabled"),
+                )
+                return jsonify({
+                    "ret": "success",
+                    "msg": "운영 모드를 즉시 저장했습니다.",
+                    "data": {key: P.ModelSetting.get(key) for key in ("guard_enabled", "main_auto_start", "detailed_log_enabled")},
+                })
             if command == "connection_test":
                 identity = self.service._request("/identity")
                 P.logger.info("GUARD_CONNECTION_TEST status=%s latency_ms=%s error=%s", identity.get("status"), identity.get("latency_ms"), identity.get("error") or "-")

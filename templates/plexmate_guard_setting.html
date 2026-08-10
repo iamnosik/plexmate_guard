@@ -5,10 +5,11 @@
 {{ macros.m_button_group([['setting_save_btn', '설정 저장'], ['guard_connection_test_btn', 'Plex 연결 테스트'], ['guard_deployment_detect_btn', '설치 방식 감지']]) }}
 <form id="setting">
   <h4>운영 모드</h4>
-  {{ macros.setting_checkbox('guard_enabled', 'Guard 사용', value=arg['guard_enabled'], desc=['ON이면 설정한 주기로 상태를 기록합니다.', '1차 버전은 자동 일시정지·자동 재시작을 수행하지 않습니다.']) }}
-  {{ macros.setting_checkbox('main_auto_start', '자동 관찰 실행', value=arg['main_auto_start'], desc=['Guard 사용 ON일 때만 동작합니다.']) }}
+  {{ macros.setting_checkbox('guard_enabled', 'Guard 사용', value=arg['guard_enabled'], desc=['ON이면 설정한 주기로 상태를 기록합니다.', '스위치를 바꾸면 즉시 저장됩니다. 자동 일시정지·자동 재시작은 수행하지 않습니다.']) }}
+  {{ macros.setting_checkbox('main_auto_start', '자동 관찰 실행', value=arg['main_auto_start'], desc=['Guard 사용 ON일 때만 동작합니다.', '스위치를 바꾸면 즉시 저장됩니다.']) }}
   {{ macros.setting_input_text('main_interval', '관찰 주기', value=arg['main_interval'], desc=['분 단위 또는 Cron 형식', '기본값: 2']) }}
-  {{ macros.setting_checkbox('detailed_log_enabled', '상세 운영 로그', value=arg['detailed_log_enabled'], desc=['조회·관찰마다 상태 판단 근거를 Guard 로그에 기록합니다.', 'Plex 토큰·원본 로그 내용·개별 파일 경로는 기록하지 않습니다.']) }}
+  {{ macros.setting_checkbox('detailed_log_enabled', '상세 운영 로그', value=arg['detailed_log_enabled'], desc=['조회·관찰마다 상태 판단 근거를 Guard 로그에 기록합니다.', '스위치를 바꾸면 즉시 저장됩니다. Plex 토큰·원본 로그 내용·개별 파일 경로는 기록하지 않습니다.']) }}
+  <div id="guard_mode_save_status" class="guard-muted">운영 모드 스위치는 즉시 저장됩니다.</div>
   {{ macros.m_hr() }}
   <h4>Plex 설치 방식</h4>
   {{ macros.setting_select('deployment_mode', '설치 방식', [['auto','자동 감지'], ['native','Synology 네이티브'], ['docker','Docker'], ['external','외부 서버(감시만)']], value=arg['deployment_mode'], desc=['자동 재시작은 지원하지 않습니다.', '대시보드 수동 재시작은 사용자가 두 번 확인한 경우에만 한 번 요청합니다.']) }}
@@ -28,6 +29,23 @@
   {{ macros.setting_input_int('baseline_scan_limit', '기본 실행 수', value=arg['baseline_scan_limit'], min=1, max=20, desc=['기본값 복원 버튼이 이 값으로 신규 스캔 제한을 되돌립니다.']) }}
 </form>
 <script>
+function guardModeValue(key) { return $('#' + key).prop('checked') ? 'True' : 'False'; }
+function saveGuardMode() {
+  $('#guard_mode_save_status').text('운영 모드를 저장 중입니다...');
+  guardAjax('setting', 'operation_mode_save', {
+    guard_enabled: guardModeValue('guard_enabled'),
+    main_auto_start: guardModeValue('main_auto_start'),
+    detailed_log_enabled: guardModeValue('detailed_log_enabled')
+  }, function(ret) {
+    if (ret.data) {
+      ['guard_enabled', 'main_auto_start', 'detailed_log_enabled'].forEach(function(key) {
+        $('#' + key).prop('checked', String(ret.data[key]) === 'True');
+      });
+      $('#guard_mode_save_status').text('운영 모드 저장 완료');
+    }
+  });
+}
+$('#guard_enabled, #main_auto_start, #detailed_log_enabled').change(saveGuardMode);
 $('#guard_connection_test_btn').click(function(e){e.preventDefault();guardAjax('setting','connection_test',{},function(ret){ if(ret.data) alert('HTTP '+ret.data.status+' · '+ret.data.latency_ms+'ms'); });});
 $('#guard_deployment_detect_btn').click(function(e){e.preventDefault();guardAjax('setting','deployment_detect',{},function(ret){ if(ret.data) alert('감지: '+ret.data.detected+'\n제어: '+ret.data.control+'\n'+(ret.data.reason||'')); });});
 </script>
