@@ -1,5 +1,5 @@
 title: "Plexmate Guard"
-version: "0.4.2"
+version: "0.5.0"
 package_name: "plexmate_guard"
 developer: "iamnosik"
 description: "Plex 메타데이터 정체를 관찰하고 상세 로그·순차 전체 갱신·스캔 유입·Plex 수동 재시작을 안전하게 제어합니다."

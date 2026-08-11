@@ -9,6 +9,7 @@
   {{ macros.setting_checkbox('main_auto_start', '자동 관찰 실행', value=arg['main_auto_start'], desc=['Guard 사용 ON일 때만 동작합니다.', '스위치를 바꾸면 즉시 저장됩니다.']) }}
   {{ macros.setting_input_text('main_interval', '관찰 주기', value=arg['main_interval'], desc=['분 단위 또는 Cron 형식', '기본값: 2']) }}
   {{ macros.setting_checkbox('detailed_log_enabled', '상세 운영 로그', value=arg['detailed_log_enabled'], desc=['조회·관찰마다 상태 판단 근거를 Guard 로그에 기록합니다.', '스위치를 바꾸면 즉시 저장됩니다. Plex 토큰·원본 로그 내용·개별 파일 경로는 기록하지 않습니다.']) }}
+  {{ macros.setting_checkbox('auto_brake_enabled', '안전 브레이크 자동 0 전환', value=arg['auto_brake_enabled'], desc=['정체 또는 Plex 응답 실패가 연속 확인되면 Plexmate 신규 스캔 제한을 0으로 바꿉니다.', '자동 재개·자동 Plex 재시작은 하지 않습니다.']) }}
   <div id="guard_mode_save_status" class="guard-muted">운영 모드 스위치는 즉시 저장됩니다.</div>
   {{ macros.m_hr() }}
   <h4>Plex 설치 방식</h4>
@@ -23,6 +24,9 @@
   {{ macros.setting_input_int('metadata_batch_ready_wait_seconds', '전체 갱신 안정화 대기(초)', value=arg['metadata_batch_ready_wait_seconds'], min=30, max=1800, desc=['각 요청 뒤 Plex가 BUSY이면 다음 요청을 보내지 않고 이 시간까지 기다립니다.', '기본값: 300초']) }}
   {{ macros.setting_input_int('agent_wait_threshold_seconds', 'SJVA 대기 경고 기준(초)', value=arg['agent_wait_threshold_seconds'], min=30, max=300) }}
   {{ macros.setting_input_int('timeout_threshold', '408/timeout 경고 횟수', value=arg['timeout_threshold'], min=1, max=10) }}
+  {{ macros.setting_input_int('auto_brake_blocked_required', '정체 연속 확인 횟수', value=arg['auto_brake_blocked_required'], min=2, max=10, desc=['METADATA_BLOCKED가 이 횟수만큼 스케줄 관찰에서 연속 확인될 때만 자동 0 전환합니다.', '기본값: 2']) }}
+  {{ macros.setting_input_int('auto_brake_unavailable_required', 'Plex 응답 실패 연속 횟수', value=arg['auto_brake_unavailable_required'], min=2, max=10, desc=['PLEX_UNAVAILABLE가 이 횟수만큼 연속 확인될 때만 자동 0 전환합니다.', '기본값: 3']) }}
+  {{ macros.setting_input_int('auto_brake_recovery_required', '재개 권고 정상 연속 횟수', value=arg['auto_brake_recovery_required'], min=2, max=10, desc=['자동 0 전환 뒤 NORMAL이 이 횟수만큼 연속 확인되면 재개 가능으로 표시합니다.', '자동으로 제한을 올리지는 않습니다. 기본값: 3']) }}
   {{ macros.setting_input_int('log_tail_bytes', '읽을 로그 크기(bytes)', value=arg['log_tail_bytes'], min=65536, max=5242880) }}
   {{ macros.m_hr() }}
   <h4>Plexmate 제어</h4>
@@ -35,17 +39,18 @@ function saveGuardMode() {
   guardAjax('setting', 'operation_mode_save', {
     guard_enabled: guardModeValue('guard_enabled'),
     main_auto_start: guardModeValue('main_auto_start'),
-    detailed_log_enabled: guardModeValue('detailed_log_enabled')
+    detailed_log_enabled: guardModeValue('detailed_log_enabled'),
+    auto_brake_enabled: guardModeValue('auto_brake_enabled')
   }, function(ret) {
     if (ret.data) {
-      ['guard_enabled', 'main_auto_start', 'detailed_log_enabled'].forEach(function(key) {
+      ['guard_enabled', 'main_auto_start', 'detailed_log_enabled', 'auto_brake_enabled'].forEach(function(key) {
         $('#' + key).prop('checked', String(ret.data[key]) === 'True');
       });
       $('#guard_mode_save_status').text('운영 모드 저장 완료');
     }
   });
 }
-$('#guard_enabled, #main_auto_start, #detailed_log_enabled').change(saveGuardMode);
+$('#guard_enabled, #main_auto_start, #detailed_log_enabled, #auto_brake_enabled').change(saveGuardMode);
 $('#guard_connection_test_btn').click(function(e){e.preventDefault();guardAjax('setting','connection_test',{},function(ret){ if(ret.data) alert('HTTP '+ret.data.status+' · '+ret.data.latency_ms+'ms'); });});
 $('#guard_deployment_detect_btn').click(function(e){e.preventDefault();guardAjax('setting','deployment_detect',{},function(ret){ if(ret.data) alert('감지: '+ret.data.detected+'\n제어: '+ret.data.control+'\n'+(ret.data.reason||'')); });});
 </script>

@@ -14,6 +14,7 @@
 </div>
 <div id="guard_notice" class="guard-notice"></div>
 <div id="guard_cards" class="guard-grid"></div>
+<div class="guard-section"><h5>안전 브레이크 판단</h5><div id="guard_brake" class="guard-muted">조회 중...</div></div>
 <div class="guard-section">
   <div class="guard-section-heading"><h5>재시작 판단</h5><div><button id="guard_ack_restart" class="btn btn-sm btn-outline-warning">권고 확인</button> <button id="guard_manual_restart" class="btn btn-sm btn-danger">Plex 수동 재시작</button></div></div>
   <p id="guard_restart_text" class="guard-muted">자동 재시작은 하지 않습니다. 수동 재시작은 사용자의 확인 뒤 한 번만 요청합니다.</p>
@@ -35,12 +36,21 @@ function guardStateTone(state) {
   if (state === 'BUSY' || state === 'MIGRATION') return 'warn';
   return '';
 }
+function guardBrakeLabel(brake) {
+  if (!brake) return '꺼짐';
+  if (brake.active && brake.recovery_ready) return '재개 확인 필요';
+  if (brake.active) return brake.enabled ? '자동 일시정지' : '일시정지 유지';
+  if (!brake.enabled) return '꺼짐';
+  return '대기';
+}
 function renderGuard(report) {
   $('#guard_generated').text('마지막 조회 ' + (report.generated_at || '-'));
   $('#guard_notice').text((report.state || 'UNKNOWN') + ' · ' + (report.message || '')).attr('data-state', report.state || 'UNKNOWN');
-  var log = report.logs || {}, pm = report.plexmate || {}, deploy = report.deployment || {}, host = report.host || {};
+  var log = report.logs || {}, pm = report.plexmate || {}, deploy = report.deployment || {}, host = report.host || {}, brake = report.safety_brake || {};
   var cards = $('#guard_cards').empty();
   cards.append(guardCard('Guard', report.guard_enabled ? '사용' : '꺼짐', report.guard_enabled ? 'good' : 'warn'));
+  cards.append(guardCard('안전 브레이크', guardBrakeLabel(brake), !brake.enabled ? 'warn' : (brake.active ? 'bad' : 'good'), brake.last_action_at || brake.recommendation || ''));
+  cards.append(guardCard('판단 점수', (brake.score == null ? '-' : brake.score) + ' / 100', brake.score >= 90 ? 'bad' : (brake.score >= 40 ? 'warn' : 'good')));
   cards.append(guardCard('현재 상태', report.state, guardStateTone(report.state)));
   cards.append(guardCard('Plex 응답', (report.identity || {}).status + ' · ' + ((report.identity || {}).latency_ms || '-') + 'ms', (report.identity || {}).ok ? 'good' : 'bad'));
   cards.append(guardCard('Metadata 큐', log.queue, log.queue_delta_10m == null ? '' : (log.queue_delta_10m > 0 ? 'bad' : 'good'), log.queue_delta_10m == null ? '로그 기준 추세 없음' : '10분 변화 ' + log.queue_delta_10m));
@@ -61,6 +71,9 @@ function renderGuard(report) {
   if (!(log.agent_waits || []).length) agents.text('최근 대기 신호가 없습니다.');
   (log.agent_waits || []).forEach(function(item) { agents.append($('<div class="guard-agent"></div>').text(item.agent + ' · ' + item.seconds + '초 대기 · Req#' + item.request)); });
   $('#guard_processes').text(((report.processes || {}).rows || []).join('\n') || '실행 중인 Plex Scanner/Server 작업을 찾지 못했습니다.');
+  var reasons = (brake.reasons || []).join(' · ');
+  var counters = '정체 ' + (brake.blocked_streak || 0) + '/' + (brake.blocked_required || '-') + ' · Plex 응답 실패 ' + (brake.unavailable_streak || 0) + '/' + (brake.unavailable_required || '-') + ' · 회복 정상 ' + (brake.normal_streak || 0) + '/' + (brake.recovery_required || '-');
+  $('#guard_brake').text((brake.recommendation || '안전 브레이크 상태를 확인 중입니다.') + ' | ' + counters + (reasons ? ' | 근거: ' + reasons : ''));
 }
 function loadGuard() { guardAjax('main', 'report', {}, function(ret) { if (ret.data) renderGuard(ret.data); }); }
 $('#guard_refresh').click(function(e) { e.preventDefault(); loadGuard(); });

@@ -28,7 +28,7 @@ class ModuleSetting(PluginModuleBase):
         try:
             if command == "operation_mode_save":
                 changed = []
-                for key in ("guard_enabled", "main_auto_start", "detailed_log_enabled"):
+                for key in ("guard_enabled", "main_auto_start", "detailed_log_enabled", "auto_brake_enabled"):
                     value = "True" if str(req.form.get(key, "False")).lower() in ("true", "1", "on", "yes") else "False"
                     if P.ModelSetting.get(key) != value:
                         P.ModelSetting.set(key, value)
@@ -42,7 +42,7 @@ class ModuleSetting(PluginModuleBase):
                 return jsonify({
                     "ret": "success",
                     "msg": "운영 모드를 즉시 저장했습니다.",
-                    "data": {key: P.ModelSetting.get(key) for key in ("guard_enabled", "main_auto_start", "detailed_log_enabled")},
+                    "data": {key: P.ModelSetting.get(key) for key in ("guard_enabled", "main_auto_start", "detailed_log_enabled", "auto_brake_enabled")},
                 })
             if command == "connection_test":
                 identity = self.service._request("/identity")

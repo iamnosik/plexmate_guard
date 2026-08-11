@@ -337,6 +337,178 @@ class PlexmateGuardService:
             return "BUSY", "Plex is processing scans or metadata."
         return "NORMAL", "No metadata blockage signal was found."
 
+    def _brake_get_bool(self, key, default=False):
+        value = P.ModelSetting.get(key)
+        if value in (None, ""):
+            return default
+        return str(value).strip().lower() in ("1", "true", "yes", "on")
+
+    def _brake_set_values(self, values):
+        for key, value in values.items():
+            value = str(value)
+            if P.ModelSetting.get(key) != value:
+                P.ModelSetting.set(key, value)
+
+    def safety_brake_status(self):
+        return {
+            "enabled": self._brake_get_bool("auto_brake_enabled"),
+            "active": self._brake_get_bool("auto_brake_active"),
+            "recovery_ready": self._brake_get_bool("auto_brake_recovery_ready"),
+            "blocked_streak": self._integer(P.ModelSetting.get("auto_brake_blocked_streak"), 0, 0, 99),
+            "unavailable_streak": self._integer(P.ModelSetting.get("auto_brake_unavailable_streak"), 0, 0, 99),
+            "normal_streak": self._integer(P.ModelSetting.get("auto_brake_normal_streak"), 0, 0, 99),
+            "blocked_required": self._integer(P.ModelSetting.get("auto_brake_blocked_required"), 2, 2, 10),
+            "unavailable_required": self._integer(P.ModelSetting.get("auto_brake_unavailable_required"), 3, 2, 10),
+            "recovery_required": self._integer(P.ModelSetting.get("auto_brake_recovery_required"), 3, 2, 10),
+            "last_reason": P.ModelSetting.get("auto_brake_last_reason") or "",
+            "last_action_at": P.ModelSetting.get("auto_brake_last_action_at") or "",
+        }
+
+    def _brake_assessment(self, snapshot):
+        state = snapshot.get("state") or "UNKNOWN"
+        logs = snapshot.get("logs") or {}
+        identity = snapshot.get("identity") or {}
+        reasons = []
+        score = 0
+        if state == "METADATA_BLOCKED":
+            score = 100
+            reasons.append("메타데이터 큐가 줄지 않고 SJVA 대기 또는 timeout이 함께 감지됨")
+            if logs.get("queue") is not None:
+                reasons.append("큐 %s건 · 10분 변화 %s" % (logs.get("queue"), logs.get("queue_delta_10m")))
+            if logs.get("max_wait_seconds", 0):
+                reasons.append("SJVA 최대 대기 %s초" % logs.get("max_wait_seconds"))
+            if logs.get("timeout_count", 0):
+                reasons.append("최근 timeout %s건" % logs.get("timeout_count"))
+        elif state == "PLEX_UNAVAILABLE":
+            score = 90
+            reasons.append("Plex identity 응답 실패: HTTP %s %s" % (identity.get("status"), identity.get("error") or ""))
+        elif state == "MIGRATION":
+            score = 40
+            reasons.append("Plex 데이터베이스 마이그레이션 중: 안전 브레이크 대상 아님")
+        elif state == "BUSY":
+            score = 25
+            reasons.append("Plex가 스캔 또는 메타데이터를 처리 중: 안전 브레이크 대상 아님")
+        else:
+            reasons.append("정상 상태")
+        return score, reasons
+
+    def _clear_safety_brake_after_manual_resume(self):
+        current = self.safety_brake_status()
+        if not current.get("active") and not current.get("recovery_ready"):
+            return
+        self._brake_set_values({
+            "auto_brake_active": "False",
+            "auto_brake_recovery_ready": "False",
+            "auto_brake_blocked_streak": "0",
+            "auto_brake_unavailable_streak": "0",
+            "auto_brake_normal_streak": "0",
+            "auto_brake_last_reason": "사용자가 Plexmate 실행 제한을 재개했습니다.",
+            "auto_brake_last_action_at": datetime.now().isoformat(timespec="seconds"),
+        })
+
+    def evaluate_safety_brake(self, snapshot, trigger):
+        """Apply only the conservative, user-enabled automatic safety brake.
+
+        Dashboard/manual observations are informational and never advance the
+        consecutive-failure counters. The brake only stops *new* Plexmate scans;
+        it never resumes work or restarts Plex automatically.
+        """
+        score, reasons = self._brake_assessment(snapshot)
+        status = self.safety_brake_status()
+        state = snapshot.get("state")
+        action = "observe"
+
+        if trigger == "schedule":
+            updates = {}
+            if state == "METADATA_BLOCKED":
+                updates.update({
+                    "auto_brake_blocked_streak": str(status["blocked_streak"] + 1),
+                    "auto_brake_unavailable_streak": "0",
+                    "auto_brake_normal_streak": "0",
+                    "auto_brake_recovery_ready": "False",
+                })
+            elif state == "PLEX_UNAVAILABLE":
+                updates.update({
+                    "auto_brake_blocked_streak": "0",
+                    "auto_brake_unavailable_streak": str(status["unavailable_streak"] + 1),
+                    "auto_brake_normal_streak": "0",
+                    "auto_brake_recovery_ready": "False",
+                })
+            elif state == "NORMAL":
+                updates.update({
+                    "auto_brake_blocked_streak": "0",
+                    "auto_brake_unavailable_streak": "0",
+                    "auto_brake_normal_streak": str(status["normal_streak"] + 1) if status["active"] else "0",
+                })
+            else:
+                updates.update({
+                    "auto_brake_blocked_streak": "0",
+                    "auto_brake_unavailable_streak": "0",
+                    "auto_brake_normal_streak": "0",
+                    "auto_brake_recovery_ready": "False",
+                })
+            self._brake_set_values(updates)
+            status = self.safety_brake_status()
+
+            should_brake = (
+                status["enabled"] and not status["active"] and
+                str(snapshot.get("actual_limit")) != "0" and
+                ((state == "METADATA_BLOCKED" and status["blocked_streak"] >= status["blocked_required"]) or
+                 (state == "PLEX_UNAVAILABLE" and status["unavailable_streak"] >= status["unavailable_required"]))
+            )
+            if should_brake:
+                reason = "; ".join(reasons)
+                result = self.set_scan_limit(
+                    0,
+                    "auto_safety_brake",
+                    event_trigger="schedule",
+                    event_state="SAFETY_BRAKE",
+                    event_payload={"score": score, "reasons": reasons, "snapshot_state": state},
+                )
+                if result.get("success"):
+                    action = "auto_paused"
+                    message = "안전 브레이크가 신규 Plexmate 스캔을 0으로 전환했습니다. 자동 재개·자동 Plex 재시작은 하지 않습니다."
+                    self._brake_set_values({
+                        "auto_brake_active": "True",
+                        "auto_brake_recovery_ready": "False",
+                        "auto_brake_normal_streak": "0",
+                        "auto_brake_last_reason": reason[:1000],
+                        "auto_brake_last_action_at": datetime.now().isoformat(timespec="seconds"),
+                    })
+                    ModelGuardEvent.record("schedule", "SAFETY_BRAKE", "auto_paused", message, {
+                        "score": score, "reasons": reasons, "previous_limit": result.get("previous"),
+                    })
+                    P.logger.warning("GUARD_SAFETY_BRAKE result=auto_paused state=%s score=%s previous_limit=%s", state, score, result.get("previous"))
+                    snapshot["actual_limit"] = "0"
+                    snapshot["desired_limit"] = "0"
+                else:
+                    action = "auto_pause_failed"
+                    P.logger.error("GUARD_SAFETY_BRAKE result=error state=%s message=%s", state, result.get("message"))
+            elif status["enabled"] and status["active"] and state == "NORMAL" and not status["recovery_ready"] and status["normal_streak"] >= status["recovery_required"]:
+                action = "recovery_ready"
+                message = "Plex가 연속 정상으로 회복되었습니다. 자동 재개하지 않았습니다. 사용자가 1개 또는 기본값으로 재개하세요."
+                self._brake_set_values({
+                    "auto_brake_recovery_ready": "True",
+                    "auto_brake_last_reason": message,
+                    "auto_brake_last_action_at": datetime.now().isoformat(timespec="seconds"),
+                })
+                ModelGuardEvent.record("schedule", "SAFETY_BRAKE", "recovery_ready", message, {
+                    "normal_streak": status["normal_streak"], "required": status["recovery_required"],
+                })
+                P.logger.info("GUARD_SAFETY_BRAKE result=recovery_ready normal_streak=%s", status["normal_streak"])
+
+        status = self.safety_brake_status()
+        status.update({"score": score, "reasons": reasons, "action": action})
+        if status["active"] and status["recovery_ready"]:
+            status["recommendation"] = "Plex가 안정화되었습니다. 자동 재개하지 않았습니다. 1개 또는 기본값으로 재개하세요."
+        elif status["active"]:
+            status["recommendation"] = "안전 브레이크가 신규 Plexmate 스캔을 막고 있습니다. Plex 상태를 확인하세요."
+        elif not status["enabled"]:
+            status["recommendation"] = "안전 브레이크는 꺼져 있습니다. 관찰과 기록만 수행합니다."
+        else:
+            status["recommendation"] = "안전 브레이크가 대기 중입니다. 연속 장애일 때만 0으로 전환합니다."
+        return status
+
     def collect(self, trigger="manual"):
         identity = self._request("/identity")
         library = self._request("/library/sections")
@@ -359,6 +531,7 @@ class PlexmateGuardService:
             "desired_limit": P.ModelSetting.get("desired_scan_limit") or "",
             "actual_limit": self.current_scan_limit(),
         }
+        snapshot["safety_brake"] = self.evaluate_safety_brake(snapshot, trigger)
         if state == "METADATA_BLOCKED":
             for candidate in logs.get("searches", []):
                 ModelMetadataRetry.upsert_candidate(candidate, "metadata_blocked")
@@ -373,7 +546,7 @@ class PlexmateGuardService:
         except Exception:
             return ""
 
-    def set_scan_limit(self, limit, action):
+    def set_scan_limit(self, limit, action, event_trigger="manual", event_state="MANUAL_CONTROL", event_payload=None):
         limit = self._integer(limit, -1, 0, 20)
         if limit < 0:
             return {"success": False, "message": "실행 제한값이 올바르지 않습니다."}
@@ -387,12 +560,16 @@ class PlexmateGuardService:
             plexmate.ModelSetting.set("scan_max_scan_count", str(limit))
             P.ModelSetting.set("desired_scan_limit", str(limit))
             message = "Plexmate 신규 스캔 제한을 %s로 설정했습니다." % limit
-            ModelGuardEvent.record("manual", "MANUAL_CONTROL", action, message, {"previous": current, "requested": limit})
+            payload = {"previous": current, "requested": limit}
+            payload.update(event_payload or {})
+            ModelGuardEvent.record(event_trigger, event_state, action, message, payload)
+            if event_trigger == "manual" and limit > 0:
+                self._clear_safety_brake_after_manual_resume()
             P.logger.info("GUARD_CONTROL action=%s previous_limit=%s requested_limit=%s result=success", action, current, limit)
             return {"success": True, "message": message, "previous": current, "requested": limit}
         except Exception as error:
             message = "Plexmate 실행 제한을 변경하지 못했습니다: %s" % type(error).__name__
-            ModelGuardEvent.record("manual", "CONTROL_ERROR", action, message, {})
+            ModelGuardEvent.record(event_trigger, "CONTROL_ERROR", action, message, event_payload or {})
             P.logger.error("GUARD_CONTROL action=%s result=error error=%s", action, type(error).__name__)
             return {"success": False, "message": message}
 

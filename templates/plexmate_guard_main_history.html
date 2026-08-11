@@ -3,9 +3,25 @@
 <link rel="stylesheet" href="{{ url_for('plexmate_guard.static', filename='css/plexmate_guard.css') }}">
 <script>var PLEXMATE_GUARD_PACKAGE = 'plexmate_guard';</script>
 <script src="{{ url_for('plexmate_guard.static', filename='js/plexmate_guard.js') }}"></script>
-<div class="guard-toolbar"><button id="history_refresh" class="btn btn-sm btn-secondary">새로고침</button></div><div class="guard-section"><div id="history_list"></div></div>
+<div class="guard-toolbar"><button id="history_refresh" class="btn btn-sm btn-secondary">새로고침</button></div>
+<div class="guard-section"><h5>현재 안전 브레이크 상태</h5><div id="history_brake" class="guard-muted">조회 중...</div></div>
+<div class="guard-section"><h5>판단·조치·회복 이력</h5><div id="history_list"></div></div>
 <script>
-function loadHistory(){guardAjax('main','history',{limit:100},function(ret){var root=$('#history_list').empty(), rows=ret.data||[]; if(!rows.length)root.text('판단 이력이 없습니다.'); rows.forEach(function(item){var row=$('<div class="guard-history"></div>');row.append($('<strong></strong>').text(item.created_at+' · '+item.state+' · '+item.action));row.append($('<div class="guard-sub"></div>').text(item.message||''));root.append(row);});});}
+function loadHistory(){guardAjax('main','history',{limit:100},function(ret){
+  var data=ret.data||{}, root=$('#history_list').empty(), rows=data.events||[], brake=data.safety_brake||{};
+  var label=!brake.enabled?'꺼짐':(brake.active?(brake.recovery_ready?'재개 확인 필요':'자동 일시정지'):'대기');
+  $('#history_brake').text('상태: '+label+' · 정체 '+(brake.blocked_streak||0)+'/'+(brake.blocked_required||'-')+' · Plex 응답 실패 '+(brake.unavailable_streak||0)+'/'+(brake.unavailable_required||'-')+' · 회복 정상 '+(brake.normal_streak||0)+'/'+(brake.recovery_required||'-')+(brake.last_action_at?' · 마지막 조치 '+brake.last_action_at:''));
+  if(!rows.length)root.text('판단 이력이 없습니다.');
+  rows.forEach(function(item){
+    var row=$('<div class="guard-history"></div>'), payload=item.payload||{}, verdict=payload.safety_brake||payload, details=[];
+    row.append($('<strong></strong>').text(item.created_at+' · '+item.state+' · '+item.action));
+    row.append($('<div class="guard-sub"></div>').text(item.message||''));
+    if (verdict.score != null) details.push('판단 점수 '+verdict.score+'/100');
+    if ((verdict.reasons||[]).length) details.push((verdict.reasons||[]).join(' · '));
+    if (details.length) row.append($('<div class="guard-sub"></div>').text(details.join(' | ')));
+    root.append(row);
+  });
+});}
 $('#history_refresh').click(function(e){e.preventDefault();loadHistory();});$(document).ready(loadHistory);
 </script>
 {% endblock %}

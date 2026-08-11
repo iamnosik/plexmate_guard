@@ -29,6 +29,17 @@ class ModuleMain(PluginModuleBase):
             "baseline_scan_limit": "2",
             "desired_scan_limit": "",
             "detailed_log_enabled": "True",
+            "auto_brake_enabled": "False",
+            "auto_brake_blocked_required": "2",
+            "auto_brake_unavailable_required": "3",
+            "auto_brake_recovery_required": "3",
+            "auto_brake_active": "False",
+            "auto_brake_recovery_ready": "False",
+            "auto_brake_blocked_streak": "0",
+            "auto_brake_unavailable_streak": "0",
+            "auto_brake_normal_streak": "0",
+            "auto_brake_last_reason": "",
+            "auto_brake_last_action_at": "",
         }
         P.plexmate_guard_service = PlexmateGuardService(P)
 
@@ -75,7 +86,10 @@ class ModuleMain(PluginModuleBase):
             elif command == "retry_refresh":
                 data = self.service.request_metadata_refresh(req.form.get("id"))
             elif command == "history":
-                return jsonify({"ret": "success", "data": ModelGuardEvent.recent(req.form.get("limit", 50))})
+                return jsonify({"ret": "success", "data": {
+                    "events": ModelGuardEvent.recent(req.form.get("limit", 50)),
+                    "safety_brake": self.service.safety_brake_status(),
+                }})
             else:
                 return jsonify({"ret": "warning", "msg": "지원하지 않는 요청입니다."}), 400
             return jsonify({"ret": "success" if data.get("success") else "warning", "msg": data.get("message"), "data": data})
