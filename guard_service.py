@@ -16,7 +16,7 @@ import urllib.parse
 import urllib.request
 from datetime import datetime, timedelta
 
-from .log_parser import parse_lines
+from .log_parser import parse_lines, parse_plexmate_lines
 from .model_event import ModelGuardEvent
 from .model_retry import ModelMetadataRetry
 from .setup import *
@@ -127,6 +127,54 @@ class PlexmateGuardService:
             "timeout_count": len(recent_timeouts),
             "searches": recent_searches,
         }
+
+    def plexmate_log_path(self):
+        configured = (P.ModelSetting.get("plexmate_log_path") or "").strip()
+        return configured or "/data/log/plex_mate.log"
+
+    def collect_plexmate_lock_signals(self):
+        """Read recent Plexmate SQLite-lock events without retaining paths."""
+        path = self.plexmate_log_path()
+        lines, error = self._read_tail(
+            path,
+            self._integer(P.ModelSetting.get("log_tail_bytes"), 1048576, 65536, 5242880),
+        )
+        parsed = parse_plexmate_lines(lines)
+        now = datetime.now()
+        window_minutes = self._integer(
+            P.ModelSetting.get("db_lock_window_minutes"), 10, 1, 60
+        )
+        burst_seconds = self._integer(
+            P.ModelSetting.get("db_lock_burst_window_seconds"), 60, 10, 600
+        )
+        cutoff = now - timedelta(minutes=window_minutes)
+        burst_cutoff = now - timedelta(seconds=burst_seconds)
+        locks = [
+            item for item in parsed.get("db_locks", [])
+            if item.get("at") and item["at"] >= cutoff
+        ]
+        burst_locks = [item for item in locks if item["at"] >= burst_cutoff]
+        last_lock = locks[-1]["at"] if locks else None
+        return {
+            "available": not bool(error),
+            "path": path,
+            "error": error,
+            "window_minutes": window_minutes,
+            "lock_count": len(locks),
+            "last_lock_at": last_lock.isoformat(timespec="seconds") if last_lock else None,
+            "burst_window_seconds": burst_seconds,
+            "burst_count": len(burst_locks),
+            "threshold": self._integer(P.ModelSetting.get("db_lock_threshold"), 3, 2, 20),
+            "burst_threshold": self._integer(
+                P.ModelSetting.get("db_lock_burst_threshold"), 3, 2, 20
+            ),
+        }
+
+    def db_lock_is_actionable(self, signals):
+        return (
+            signals.get("lock_count", 0) >= signals.get("threshold", 3)
+            or signals.get("burst_count", 0) >= signals.get("burst_threshold", 3)
+        )
 
     def plexmate_work(self):
         path = "/data/db/plex_mate.db"
@@ -302,32 +350,36 @@ class PlexmateGuardService:
         deploy = snapshot.get("deployment", {})
         identity = snapshot.get("identity", {})
         library = snapshot.get("library", {})
+        lock_signals = snapshot.get("plexmate_logs", {})
         P.logger.info(
             "GUARD_OBSERVE trigger=%s state=%s plex=http%s/%sms library=http%s/%sms "
-            "queue=%s delta_10m=%s sjva_max=%ss timeout_10m=%s plexmate=R%s/E%s/S%s "
-            "limit=%s/%s deploy=%s/%s load=%s process_count=%s log=%s",
+            "queue=%s delta_10m=%s sjva_max=%ss timeout_10m=%s db_lock_10m=%s db_lock_burst=%s plexmate=R%s/E%s/S%s "
+            "limit=%s/%s deploy=%s/%s load=%s process_count=%s log=%s lock_log=%s",
             trigger, snapshot.get("state"), identity.get("status"), identity.get("latency_ms"),
             library.get("status"), library.get("latency_ms"), logs.get("queue"),
-            logs.get("queue_delta_10m"), logs.get("max_wait_seconds"), logs.get("timeout_count"),
+            logs.get("queue_delta_10m"), logs.get("max_wait_seconds"), logs.get("timeout_count"), lock_signals.get("lock_count", 0), lock_signals.get("burst_count", 0),
             counts.get("READY", 0), counts.get("ENQUEUE", 0), counts.get("SCANNING", 0),
             snapshot.get("desired_limit") or "-", snapshot.get("actual_limit") or "-",
             deploy.get("detected"), deploy.get("control"), "/".join(snapshot.get("host", {}).get("load", [])),
-            len(snapshot.get("processes", {}).get("rows", [])), "ok" if logs.get("available") else logs.get("error"),
+            len(snapshot.get("processes", {}).get("rows", [])), "ok" if logs.get("available") else logs.get("error"), "ok" if lock_signals.get("available") else lock_signals.get("error"),
         )
-        if snapshot.get("state") in ("METADATA_BLOCKED", "PLEX_UNAVAILABLE", "MIGRATION"):
+        if snapshot.get("state") in ("METADATA_BLOCKED", "PLEX_UNAVAILABLE", "PLEXMATE_DB_LOCKED", "MIGRATION"):
             waits = ["%s:%ss" % (item.get("agent"), item.get("seconds")) for item in logs.get("agent_waits", [])[:3]]
             P.logger.warning(
-                "GUARD_ALERT state=%s reason=%s candidates=%s waits=%s deployment_reason=%s",
+                "GUARD_ALERT state=%s reason=%s candidates=%s waits=%s db_lock_10m=%s db_lock_burst=%s deployment_reason=%s",
                 snapshot.get("state"), snapshot.get("message"), len(logs.get("searches", [])),
-                ",".join(waits) or "-", deploy.get("reason") or "-",
+                ",".join(waits) or "-", lock_signals.get("lock_count", 0), lock_signals.get("burst_count", 0), deploy.get("reason") or "-",
             )
 
-    def decide_state(self, identity, logs):
+    def decide_state(self, identity, logs, plexmate_logs=None):
         body = identity.get("body") or b""
         if identity.get("status") == 503 and b"database migrations" in body.lower():
             return "MIGRATION", "Plex database migration is running; wait only."
         if not identity.get("ok"):
             return "PLEX_UNAVAILABLE", "Plex identity request failed."
+        plexmate_logs = plexmate_logs or {}
+        if self.db_lock_is_actionable(plexmate_logs):
+            return "PLEXMATE_DB_LOCKED", "Plexmate detected repeated SQLite database locks."
         queue_stalled = logs.get("queue") is not None and logs.get("queue_delta_10m") is not None and logs.get("queue_delta_10m") >= 0
         agent_stalled = logs.get("max_wait_seconds", 0) >= self._integer(P.ModelSetting.get("agent_wait_threshold_seconds"), 60, 30, 300)
         timeout_stalled = logs.get("timeout_count", 0) >= self._integer(P.ModelSetting.get("timeout_threshold"), 2, 1, 10)
@@ -335,6 +387,8 @@ class PlexmateGuardService:
             return "METADATA_BLOCKED", "Metadata queue is not decreasing while SJVA agents are delayed."
         if logs.get("queue") is not None or logs.get("max_wait_seconds", 0):
             return "BUSY", "Plex is processing scans or metadata."
+        if plexmate_logs.get("lock_count", 0):
+            return "NORMAL", "Plexmate SQLite lock observed; below safety threshold."
         return "NORMAL", "No metadata blockage signal was found."
 
     def _brake_get_bool(self, key, default=False):
@@ -356,15 +410,18 @@ class PlexmateGuardService:
             "recovery_ready": self._brake_get_bool("auto_brake_recovery_ready"),
             "blocked_streak": self._integer(P.ModelSetting.get("auto_brake_blocked_streak"), 0, 0, 99),
             "unavailable_streak": self._integer(P.ModelSetting.get("auto_brake_unavailable_streak"), 0, 0, 99),
+            "db_lock_streak": self._integer(P.ModelSetting.get("auto_brake_db_lock_streak"), 0, 0, 99),
             "normal_streak": self._integer(P.ModelSetting.get("auto_brake_normal_streak"), 0, 0, 99),
             "blocked_required": self._integer(P.ModelSetting.get("auto_brake_blocked_required"), 2, 2, 10),
             "unavailable_required": self._integer(P.ModelSetting.get("auto_brake_unavailable_required"), 3, 2, 10),
+            "db_lock_required": self._integer(P.ModelSetting.get("auto_brake_db_lock_required"), 2, 2, 10),
             "recovery_required": self._integer(P.ModelSetting.get("auto_brake_recovery_required"), 3, 2, 10),
             "last_reason": P.ModelSetting.get("auto_brake_last_reason") or "",
             "last_action_at": P.ModelSetting.get("auto_brake_last_action_at") or "",
         }
 
     def _brake_assessment(self, snapshot):
+        lock_signals = snapshot.get("plexmate_logs") or {}
         state = snapshot.get("state") or "UNKNOWN"
         logs = snapshot.get("logs") or {}
         identity = snapshot.get("identity") or {}
@@ -379,6 +436,10 @@ class PlexmateGuardService:
                 reasons.append("SJVA 최대 대기 %s초" % logs.get("max_wait_seconds"))
             if logs.get("timeout_count", 0):
                 reasons.append("최근 timeout %s건" % logs.get("timeout_count"))
+        elif state == "PLEXMATE_DB_LOCKED":
+            score = 85
+            reasons.append("Plexmate가 Plex DB 잠김을 반복 감지함")
+            reasons.append("최근 %s분 %s회 · 최근 폭주창 %s회" % (lock_signals.get("window_minutes", 10), lock_signals.get("lock_count", 0), lock_signals.get("burst_count", 0)))
         elif state == "PLEX_UNAVAILABLE":
             score = 90
             reasons.append("Plex identity 응답 실패: HTTP %s %s" % (identity.get("status"), identity.get("error") or ""))
@@ -389,7 +450,11 @@ class PlexmateGuardService:
             score = 25
             reasons.append("Plex가 스캔 또는 메타데이터를 처리 중: 안전 브레이크 대상 아님")
         else:
-            reasons.append("정상 상태")
+            if lock_signals.get("lock_count", 0):
+                score = 15
+                reasons.append("최근 Plexmate DB 잠김 %s회(안전 임계값 미만)" % lock_signals.get("lock_count"))
+            else:
+                reasons.append("정상 상태")
         return score, reasons
 
     def _clear_safety_brake_after_manual_resume(self):
@@ -401,6 +466,7 @@ class PlexmateGuardService:
             "auto_brake_recovery_ready": "False",
             "auto_brake_blocked_streak": "0",
             "auto_brake_unavailable_streak": "0",
+            "auto_brake_db_lock_streak": "0",
             "auto_brake_normal_streak": "0",
             "auto_brake_last_reason": "사용자가 Plexmate 실행 제한을 재개했습니다.",
             "auto_brake_last_action_at": datetime.now().isoformat(timespec="seconds"),
@@ -424,6 +490,7 @@ class PlexmateGuardService:
                 updates.update({
                     "auto_brake_blocked_streak": str(status["blocked_streak"] + 1),
                     "auto_brake_unavailable_streak": "0",
+                    "auto_brake_db_lock_streak": "0",
                     "auto_brake_normal_streak": "0",
                     "auto_brake_recovery_ready": "False",
                 })
@@ -431,6 +498,15 @@ class PlexmateGuardService:
                 updates.update({
                     "auto_brake_blocked_streak": "0",
                     "auto_brake_unavailable_streak": str(status["unavailable_streak"] + 1),
+                    "auto_brake_db_lock_streak": "0",
+                    "auto_brake_normal_streak": "0",
+                    "auto_brake_recovery_ready": "False",
+                })
+            elif state == "PLEXMATE_DB_LOCKED":
+                updates.update({
+                    "auto_brake_blocked_streak": "0",
+                    "auto_brake_unavailable_streak": "0",
+                    "auto_brake_db_lock_streak": str(status["db_lock_streak"] + 1),
                     "auto_brake_normal_streak": "0",
                     "auto_brake_recovery_ready": "False",
                 })
@@ -438,12 +514,14 @@ class PlexmateGuardService:
                 updates.update({
                     "auto_brake_blocked_streak": "0",
                     "auto_brake_unavailable_streak": "0",
+                    "auto_brake_db_lock_streak": "0",
                     "auto_brake_normal_streak": str(status["normal_streak"] + 1) if status["active"] else "0",
                 })
             else:
                 updates.update({
                     "auto_brake_blocked_streak": "0",
                     "auto_brake_unavailable_streak": "0",
+                    "auto_brake_db_lock_streak": "0",
                     "auto_brake_normal_streak": "0",
                     "auto_brake_recovery_ready": "False",
                 })
@@ -454,7 +532,8 @@ class PlexmateGuardService:
                 status["enabled"] and not status["active"] and
                 str(snapshot.get("actual_limit")) != "0" and
                 ((state == "METADATA_BLOCKED" and status["blocked_streak"] >= status["blocked_required"]) or
-                 (state == "PLEX_UNAVAILABLE" and status["unavailable_streak"] >= status["unavailable_required"]))
+                 (state == "PLEX_UNAVAILABLE" and status["unavailable_streak"] >= status["unavailable_required"]) or
+                 (state == "PLEXMATE_DB_LOCKED" and status["db_lock_streak"] >= status["db_lock_required"]))
             )
             if should_brake:
                 reason = "; ".join(reasons)
@@ -467,7 +546,7 @@ class PlexmateGuardService:
                 )
                 if result.get("success"):
                     action = "auto_paused"
-                    message = "안전 브레이크가 신규 Plexmate 스캔을 0으로 전환했습니다. 자동 재개·자동 Plex 재시작은 하지 않습니다."
+                    message = "안전 브레이크가 Plexmate 실행 제한을 0으로 전환했습니다. 진행 중 스캔은 종료하지 않으며 자동 재개·자동 Plex 재시작은 하지 않습니다."
                     self._brake_set_values({
                         "auto_brake_active": "True",
                         "auto_brake_recovery_ready": "False",
@@ -484,7 +563,7 @@ class PlexmateGuardService:
                 else:
                     action = "auto_pause_failed"
                     P.logger.error("GUARD_SAFETY_BRAKE result=error state=%s message=%s", state, result.get("message"))
-            elif status["enabled"] and status["active"] and state == "NORMAL" and not status["recovery_ready"] and status["normal_streak"] >= status["recovery_required"]:
+            elif status["enabled"] and status["active"] and state == "NORMAL" and not (snapshot.get("plexmate_logs") or {}).get("lock_count", 0) and not status["recovery_ready"] and status["normal_streak"] >= status["recovery_required"]:
                 action = "recovery_ready"
                 message = "Plex가 연속 정상으로 회복되었습니다. 자동 재개하지 않았습니다. 사용자가 1개 또는 기본값으로 재개하세요."
                 self._brake_set_values({
@@ -513,7 +592,8 @@ class PlexmateGuardService:
         identity = self._request("/identity")
         library = self._request("/library/sections")
         logs = self.collect_log_signals()
-        state, message = self.decide_state(identity, logs)
+        plexmate_logs = self.collect_plexmate_lock_signals()
+        state, message = self.decide_state(identity, logs, plexmate_logs)
         deployment = self.deployment()
         plexmate = self.plexmate_work()
         snapshot = {
@@ -525,6 +605,7 @@ class PlexmateGuardService:
             "library": {key: library.get(key) for key in ("ok", "status", "latency_ms", "error")},
             "logs": logs,
             "deployment": deployment,
+            "plexmate_logs": plexmate_logs,
             "plexmate": plexmate,
             "processes": self.process_snapshot(),
             "host": self.host_snapshot(),
@@ -725,7 +806,7 @@ class PlexmateGuardService:
         if row is None or row.status != "pending":
             return {"success": False, "message": "재시도 가능한 항목이 아닙니다."}
         snapshot = self.collect("retry_preflight")
-        if snapshot["state"] in ("METADATA_BLOCKED", "MIGRATION", "PLEX_UNAVAILABLE"):
+        if snapshot["state"] in ("METADATA_BLOCKED", "PLEXMATE_DB_LOCKED", "MIGRATION", "PLEX_UNAVAILABLE"):
             return {"success": False, "message": "현재 Plex 상태에서는 metadata 재시도를 실행하지 않습니다."}
         timeout_seconds = self._integer(P.ModelSetting.get("metadata_refresh_timeout_seconds"), 30, 5, 90)
         response = self._request(

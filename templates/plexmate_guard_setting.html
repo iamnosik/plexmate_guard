@@ -17,6 +17,7 @@
   {{ macros.setting_input_text('docker_container', 'Docker 컨테이너 ID/이름', value=arg['docker_container'], desc=['Docker Plex를 명시적으로 선택한 경우에만 입력하세요.']) }}
   {{ macros.setting_input_text('plex_log_path', 'Plex 로그 파일 경로', value=arg['plex_log_path'], desc=['FF 컨테이너에서 보이는 경로입니다.', '큐·SJVA 대기·408 분석에 사용합니다.']) }}
   {{ macros.m_hr() }}
+  {{ macros.setting_input_text('plexmate_log_path', 'Plexmate 로그 파일 경로', value=arg.get('plexmate_log_path', '/data/log/plex_mate.log'), desc=['기본값: /data/log/plex_mate.log', 'Plex DB 잠김(database is locked) 횟수 분석에 사용합니다.']) }}
   <h4>판단 기준</h4>
   {{ macros.setting_input_int('http_timeout_seconds', 'Plex API 제한 시간(초)', value=arg['http_timeout_seconds'], min=1, max=15, desc=['상태 조회용 짧은 제한 시간입니다.']) }}
   {{ macros.setting_input_int('metadata_refresh_timeout_seconds', 'Metadata 갱신 제한 시간(초)', value=arg['metadata_refresh_timeout_seconds'], min=5, max=90, desc=['개별 metadata 갱신은 Plex 내부 처리를 기다리므로 별도 제한 시간을 사용합니다.', '기본값: 30초']) }}
@@ -24,8 +25,13 @@
   {{ macros.setting_input_int('metadata_batch_ready_wait_seconds', '전체 갱신 안정화 대기(초)', value=arg['metadata_batch_ready_wait_seconds'], min=30, max=1800, desc=['각 요청 뒤 Plex가 BUSY이면 다음 요청을 보내지 않고 이 시간까지 기다립니다.', '기본값: 300초']) }}
   {{ macros.setting_input_int('agent_wait_threshold_seconds', 'SJVA 대기 경고 기준(초)', value=arg['agent_wait_threshold_seconds'], min=30, max=300) }}
   {{ macros.setting_input_int('timeout_threshold', '408/timeout 경고 횟수', value=arg['timeout_threshold'], min=1, max=10) }}
+  {{ macros.setting_input_int('db_lock_window_minutes', 'DB 잠김 관찰 시간(분)', value=arg.get('db_lock_window_minutes', '10'), min=1, max=60, desc=['이 시간 안의 database is locked 횟수를 집계합니다.', '기본값: 10분']) }}
+  {{ macros.setting_input_int('db_lock_threshold', 'DB 잠김 판정 횟수', value=arg.get('db_lock_threshold', '3'), min=2, max=20, desc=['시간창 안에서 이 횟수 이상이면 PLEXMATE_DB_LOCKED로 판정합니다.', '기본값: 3회']) }}
+  {{ macros.setting_input_int('db_lock_burst_window_seconds', 'DB 잠김 폭주 시간(초)', value=arg.get('db_lock_burst_window_seconds', '60'), min=10, max=600, desc=['짧은 시간의 잠김 폭주를 별도로 감지합니다.', '기본값: 60초']) }}
+  {{ macros.setting_input_int('db_lock_burst_threshold', 'DB 잠김 폭주 횟수', value=arg.get('db_lock_burst_threshold', '3'), min=2, max=20, desc=['폭주 시간 안에서 이 횟수 이상이면 위험 신호입니다.', '기본값: 3회']) }}
   {{ macros.setting_input_int('auto_brake_blocked_required', '정체 연속 확인 횟수', value=arg['auto_brake_blocked_required'], min=2, max=10, desc=['METADATA_BLOCKED가 이 횟수만큼 스케줄 관찰에서 연속 확인될 때만 자동 0 전환합니다.', '기본값: 2']) }}
   {{ macros.setting_input_int('auto_brake_unavailable_required', 'Plex 응답 실패 연속 횟수', value=arg['auto_brake_unavailable_required'], min=2, max=10, desc=['PLEX_UNAVAILABLE가 이 횟수만큼 연속 확인될 때만 자동 0 전환합니다.', '기본값: 3']) }}
+  {{ macros.setting_input_int('auto_brake_db_lock_required', 'DB 잠김 브레이크 연속 횟수', value=arg.get('auto_brake_db_lock_required', '2'), min=2, max=10, desc=['PLEXMATE_DB_LOCKED가 이 횟수만큼 스케줄에서 연속 확인될 때만 실행 제한을 0으로 바꿉니다.', '기본값: 2']) }}
   {{ macros.setting_input_int('auto_brake_recovery_required', '재개 권고 정상 연속 횟수', value=arg['auto_brake_recovery_required'], min=2, max=10, desc=['자동 0 전환 뒤 NORMAL이 이 횟수만큼 연속 확인되면 재개 가능으로 표시합니다.', '자동으로 제한을 올리지는 않습니다. 기본값: 3']) }}
   {{ macros.setting_input_int('log_tail_bytes', '읽을 로그 크기(bytes)', value=arg['log_tail_bytes'], min=65536, max=5242880) }}
   {{ macros.m_hr() }}

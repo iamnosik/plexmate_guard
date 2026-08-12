@@ -32,7 +32,7 @@ function guardCard(label, value, tone, sub) {
 }
 function guardStateTone(state) {
   if (state === 'NORMAL') return 'good';
-  if (state === 'METADATA_BLOCKED' || state === 'PLEX_UNAVAILABLE') return 'bad';
+  if (state === 'METADATA_BLOCKED' || state === 'PLEX_UNAVAILABLE' || state === 'PLEXMATE_DB_LOCKED') return 'bad';
   if (state === 'BUSY' || state === 'MIGRATION') return 'warn';
   return '';
 }
@@ -46,7 +46,7 @@ function guardBrakeLabel(brake) {
 function renderGuard(report) {
   $('#guard_generated').text('마지막 조회 ' + (report.generated_at || '-'));
   $('#guard_notice').text((report.state || 'UNKNOWN') + ' · ' + (report.message || '')).attr('data-state', report.state || 'UNKNOWN');
-  var log = report.logs || {}, pm = report.plexmate || {}, deploy = report.deployment || {}, host = report.host || {}, brake = report.safety_brake || {};
+  var log = report.logs || {}, lock = report.plexmate_logs || {}, pm = report.plexmate || {}, deploy = report.deployment || {}, host = report.host || {}, brake = report.safety_brake || {};
   var cards = $('#guard_cards').empty();
   cards.append(guardCard('Guard', report.guard_enabled ? '사용' : '꺼짐', report.guard_enabled ? 'good' : 'warn'));
   cards.append(guardCard('안전 브레이크', guardBrakeLabel(brake), !brake.enabled ? 'warn' : (brake.active ? 'bad' : 'good'), brake.last_action_at || brake.recommendation || ''));
@@ -56,12 +56,15 @@ function renderGuard(report) {
   cards.append(guardCard('Metadata 큐', log.queue, log.queue_delta_10m == null ? '' : (log.queue_delta_10m > 0 ? 'bad' : 'good'), log.queue_delta_10m == null ? '로그 기준 추세 없음' : '10분 변화 ' + log.queue_delta_10m));
   cards.append(guardCard('SJVA 최대 대기', (log.max_wait_seconds || 0) + '초', log.max_wait_seconds >= 60 ? 'bad' : ''));
   cards.append(guardCard('최근 408/timeout', log.timeout_count || 0, log.timeout_count >= 2 ? 'bad' : ''));
+  cards.append(guardCard('Plex DB 잠김', lock.lock_count || 0, (lock.lock_count >= (lock.threshold || 3) || lock.burst_count >= (lock.burst_threshold || 3)) ? 'bad' : (lock.lock_count ? 'warn' : 'good'), lock.error ? '로그 읽기 실패: ' + lock.error : ('최근 ' + (lock.window_minutes || 10) + '분 · 폭주창 ' + (lock.burst_count || 0))));
   cards.append(guardCard('Plexmate 제한', '목표 ' + (report.desired_limit || '-') + ' / 실제 ' + (report.actual_limit || '-'), report.desired_limit && String(report.desired_limit) !== String(report.actual_limit) ? 'warn' : ''));
   var c = (pm.counts || {}); cards.append(guardCard('Plexmate 작업', 'R ' + (c.READY || 0) + ' · E ' + (c.ENQUEUE || 0) + ' · S ' + (c.SCANNING || 0)));
   cards.append(guardCard('Plex 설치', deploy.detected || '-', deploy.control === 'monitor_only' ? 'warn' : '', deploy.reason || ''));
   cards.append(guardCard('NAS Load', (host.load || []).join(' / '), ''));
   var manualAvailable = deploy.control === 'manual_available' && String(report.actual_limit) === '0';
-  var restart = report.state === 'METADATA_BLOCKED'
+  var restart = report.state === 'PLEXMATE_DB_LOCKED'
+    ? 'Plex DB 잠김 폭주가 반복되었습니다. Plexmate 실행 제한을 0으로 유지하고 원인을 확인한 뒤 필요하면 수동 재시작을 요청하세요.'
+    : report.state === 'METADATA_BLOCKED'
     ? '메타데이터 정체가 감지되었습니다. Plexmate 유입을 멈춘 뒤 필요하면 수동 재시작을 요청하세요.'
     : '자동 재시작은 하지 않습니다. 수동 버튼은 Plexmate 제한이 0일 때만 사용할 수 있습니다.';
   if (!manualAvailable) restart += ' 현재 재시작 조건: ' + (String(report.actual_limit) !== '0' ? 'Plexmate 제한을 0으로 설정' : (deploy.reason || '대상 확인 필요'));
@@ -72,7 +75,7 @@ function renderGuard(report) {
   (log.agent_waits || []).forEach(function(item) { agents.append($('<div class="guard-agent"></div>').text(item.agent + ' · ' + item.seconds + '초 대기 · Req#' + item.request)); });
   $('#guard_processes').text(((report.processes || {}).rows || []).join('\n') || '실행 중인 Plex Scanner/Server 작업을 찾지 못했습니다.');
   var reasons = (brake.reasons || []).join(' · ');
-  var counters = '정체 ' + (brake.blocked_streak || 0) + '/' + (brake.blocked_required || '-') + ' · Plex 응답 실패 ' + (brake.unavailable_streak || 0) + '/' + (brake.unavailable_required || '-') + ' · 회복 정상 ' + (brake.normal_streak || 0) + '/' + (brake.recovery_required || '-');
+  var counters = '정체 ' + (brake.blocked_streak || 0) + '/' + (brake.blocked_required || '-') + ' · Plex 응답 실패 ' + (brake.unavailable_streak || 0) + '/' + (brake.unavailable_required || '-') + ' · DB 잠김 ' + (brake.db_lock_streak || 0) + '/' + (brake.db_lock_required || '-') + ' · 회복 정상 ' + (brake.normal_streak || 0) + '/' + (brake.recovery_required || '-');
   $('#guard_brake').text((brake.recommendation || '안전 브레이크 상태를 확인 중입니다.') + ' | ' + counters + (reasons ? ' | 근거: ' + reasons : ''));
 }
 function loadGuard() { guardAjax('main', 'report', {}, function(ret) { if (ret.data) renderGuard(ret.data); }); }

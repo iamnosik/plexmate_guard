@@ -72,3 +72,37 @@ def parse_lines(lines):
         "timeout_events": timeout_events[-100:],
         "searches": searches[-20:],
     }
+
+PLEXMATE_STAMP_RE = re.compile(r"^\[(?P<stamp>\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}[,.]\d+)")
+DB_LOCK_RE = re.compile(r"database is locked(?:\s*\((?P<code>\d+)\))?", re.IGNORECASE)
+
+
+def parse_plexmate_stamp(line):
+    """Parse Plexmate's local log timestamp without exposing the log line."""
+    match = PLEXMATE_STAMP_RE.search(line)
+    if not match:
+        return None
+    try:
+        stamp = match.group("stamp").replace(",", ".")
+        return datetime.strptime(stamp, "%Y-%m-%d %H:%M:%S.%f")
+    except ValueError:
+        return None
+
+
+def parse_plexmate_lines(lines):
+    """Return bounded SQLite-lock signals from Plexmate's own log.
+
+    Only the timestamp, SQLite error code, and countable signal are returned;
+    file paths and request contents are intentionally not retained.
+    """
+    locks = []
+    for line in lines:
+        match = DB_LOCK_RE.search(line)
+        if not match:
+            continue
+        locks.append({
+            "at": parse_plexmate_stamp(line),
+            "code": int(match.group("code") or 5),
+        })
+    locks.sort(key=lambda item: item["at"] or datetime.min)
+    return {"db_locks": locks[-200:]}

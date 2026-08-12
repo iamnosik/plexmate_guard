@@ -18,5 +18,18 @@ class LogParserTest(unittest.TestCase):
         self.assertEqual(report["searches"][0]["rating_key"], "1936195")
 
 
+    def test_collects_plexmate_db_locks_without_paths(self):
+        from log_parser import parse_plexmate_lines
+
+        lines = [
+            "[2026-08-12 03:13:34,122|INFO|plex_mate|plex_db.py:90] {'log': 'Runtime error near line 1: database is locked (5)'}",
+            "[2026-08-12 03:13:39,996|INFO|plex_mate|plex_db.py:90] {'log': 'Runtime error near line 1: database is locked (5)'}",
+            "[2026-08-12 03:13:40,000|INFO|plex_mate|plex_db.py:90] normal",
+        ]
+        report = parse_plexmate_lines(lines)
+        self.assertEqual(len(report["db_locks"]), 2)
+        self.assertEqual(report["db_locks"][0]["code"], 5)
+        self.assertNotIn("line", report["db_locks"][0])
+
 if __name__ == "__main__":
     unittest.main()
