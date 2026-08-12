@@ -40,6 +40,25 @@
 </form>
 <script>
 function guardModeValue(key) { return $('#' + key).prop('checked') ? 'True' : 'False'; }
+function guardSettingPayload() { return $('#setting').serialize(); }
+$('#setting_save_btn').off('click.plexmateGuard').on('click.plexmateGuard', function(e) {
+  e.preventDefault();
+  e.stopImmediatePropagation();
+  var button = $(this);
+  button.prop('disabled', true).text('저장 중...');
+  guardAjax('setting', 'settings_save', guardSettingPayload(), function(ret) {
+    button.prop('disabled', false).text('설정 저장');
+    if (ret.data && ret.data.settings) {
+      Object.keys(ret.data.settings).forEach(function(key) {
+        var node = $('#' + key);
+        if (!node.length) return;
+        if (node.attr('type') === 'checkbox') node.prop('checked', String(ret.data.settings[key]) === 'True');
+        else node.val(ret.data.settings[key]);
+      });
+    }
+  }).fail(function() { button.prop('disabled', false).text('설정 저장'); });
+  return false;
+});
 function saveGuardMode() {
   $('#guard_mode_save_status').text('운영 모드를 저장 중입니다...');
   guardAjax('setting', 'operation_mode_save', {
