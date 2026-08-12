@@ -56,7 +56,7 @@ $('#setting_save_btn').off('click.plexmateGuard').on('click.plexmateGuard', func
         else node.val(ret.data.settings[key]);
       });
     }
-  }).fail(function() { button.prop('disabled', false).text('설정 저장'); });
+  });
   return false;
 });
 function saveGuardMode() {
