@@ -62,15 +62,22 @@ class ModelGuardEvent(ModelBase):
             )
             delete_ids = normal_observation_ids_to_delete(rows, cutoff)
             deleted = 0
-            for start in range(0, len(delete_ids), 500):
-                chunk = delete_ids[start:start + 500]
-                deleted += (
-                    F.db.session.query(cls)
-                    .filter(cls.id.in_(chunk))
-                    .delete(synchronize_session=False)
-                )
-            if deleted:
-                F.db.session.commit()
+            # Commit small batches so SQLite write locks are released quickly.
+            # This matters most for the one-time upgrade compaction on a large
+            # historical DB; normal daily maintenance usually has little or
+            # nothing to delete.
+            for start in range(0, len(delete_ids), 200):
+                chunk = delete_ids[start:start + 200]
+                try:
+                    deleted += (
+                        F.db.session.query(cls)
+                        .filter(cls.id.in_(chunk))
+                        .delete(synchronize_session=False)
+                    )
+                    F.db.session.commit()
+                except Exception:
+                    F.db.session.rollback()
+                    raise
         return {"deleted": deleted, "retention_days": retention_days}
 
     @classmethod
