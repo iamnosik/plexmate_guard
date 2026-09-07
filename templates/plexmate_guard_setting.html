@@ -12,6 +12,10 @@
   {{ macros.setting_checkbox('auto_brake_enabled', '안전 브레이크 자동 0 전환', value=arg['auto_brake_enabled'], desc=['정체 또는 Plex 응답 실패가 연속 확인되면 Plexmate 신규 스캔 제한을 0으로 바꿉니다.', '자동 재개·자동 Plex 재시작은 하지 않습니다.']) }}
   <div id="guard_mode_save_status" class="guard-muted">운영 모드 스위치는 즉시 저장됩니다.</div>
   {{ macros.m_hr() }}
+  <h4>판단 이력 저장</h4>
+  {{ macros.setting_input_int('event_normal_heartbeat_minutes', '정상 상태 이력 간격(분)', value=arg.get('event_normal_heartbeat_minutes', '60'), min=15, max=1440, desc=['NORMAL/BUSY가 계속 같은 상태일 때 대표 이력만 이 간격으로 저장합니다.', '상태 변화와 장애 상태는 이 간격과 무관하게 즉시 기록합니다. 기본값: 60분']) }}
+  {{ macros.setting_input_int('event_normal_retention_days', '정상 대표 이력 보존(일)', value=arg.get('event_normal_retention_days', '30'), min=7, max=365, desc=['오래된 반복 NORMAL 이력만 정리합니다.', '장애·수동 조작·Safety Brake·상태 복귀 전환 이력은 삭제하지 않습니다. 기본값: 30일']) }}
+  {{ macros.m_hr() }}
   <h4>Plex 설치 방식</h4>
   {{ macros.setting_select('deployment_mode', '설치 방식', [['auto','자동 감지'], ['native','Synology 네이티브'], ['docker','Docker'], ['external','외부 서버(감시만)']], value=arg['deployment_mode'], desc=['자동 재시작은 지원하지 않습니다.', '대시보드 수동 재시작은 사용자가 두 번 확인한 경우에만 한 번 요청합니다.']) }}
   {{ macros.setting_input_text('docker_container', 'Docker 컨테이너 ID/이름', value=arg['docker_container'], desc=['Docker Plex를 명시적으로 선택한 경우에만 입력하세요.']) }}

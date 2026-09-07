@@ -16,6 +16,7 @@ import urllib.parse
 import urllib.request
 from datetime import datetime, timedelta
 
+from .event_policy import should_persist_observation
 from .log_parser import parse_lines, parse_plexmate_lines
 from .model_event import ModelGuardEvent
 from .model_retry import ModelMetadataRetry
@@ -28,6 +29,8 @@ class PlexmateGuardService:
         self._batch_lock = threading.Lock()
         self._batch_stop = threading.Event()
         self._batch_thread = None
+        self._event_maintenance_lock = threading.Lock()
+        self._last_event_maintenance = None
         self._batch_state = {
             "status": "idle", "total": 0, "completed": 0, "unconfirmed": 0,
             "failed": 0, "skipped": 0, "current_id": None, "message": "대기 중", "started_at": None,
@@ -340,6 +343,50 @@ class PlexmateGuardService:
             P.logger.error("GUARD_RESTART result=exception target=%s error=%s", target, type(error).__name__)
             return {"success": False, "message": message, "target": target}
 
+    def _event_maintenance_if_due(self):
+        """Compact low-value NORMAL observations at most once per day."""
+        now = datetime.now()
+        if self._last_event_maintenance and now - self._last_event_maintenance < timedelta(hours=24):
+            return
+        if not self._event_maintenance_lock.acquire(False):
+            return
+        try:
+            if self._last_event_maintenance and now - self._last_event_maintenance < timedelta(hours=24):
+                return
+            retention_days = self._integer(
+                P.ModelSetting.get("event_normal_retention_days"), 30, 7, 365
+            )
+            result = ModelGuardEvent.compact_normal_observations(retention_days)
+            self._last_event_maintenance = now
+            if result.get("deleted"):
+                P.logger.info(
+                    "GUARD_EVENT_MAINTENANCE deleted=%s normal_retention_days=%s",
+                    result.get("deleted"), retention_days,
+                )
+        except Exception as error:
+            P.logger.warning("GUARD_EVENT_MAINTENANCE failed=%s", type(error).__name__)
+        finally:
+            self._event_maintenance_lock.release()
+
+    def persist_observation(self, trigger, state, message, snapshot):
+        """Persist only operationally useful observations."""
+        if trigger != "schedule":
+            return False
+        last = ModelGuardEvent.latest_schedule_observation()
+        heartbeat_minutes = self._integer(
+            P.ModelSetting.get("event_normal_heartbeat_minutes"), 60, 15, 1440
+        )
+        persist, reason = should_persist_observation(
+            trigger, state, last.get("state"), last.get("created_at"),
+            datetime.now(), heartbeat_minutes,
+        )
+        if not persist:
+            return False
+        stored_snapshot = dict(snapshot)
+        stored_snapshot["event_persistence"] = {"reason": reason}
+        ModelGuardEvent.record(trigger, state, "observe", message, stored_snapshot)
+        return True
+
     def log_snapshot(self, trigger, snapshot):
         """Write one redacted operational line for each collection cycle."""
         if not P.ModelSetting.get_bool("detailed_log_enabled"):
@@ -543,6 +590,7 @@ class PlexmateGuardService:
                     event_trigger="schedule",
                     event_state="SAFETY_BRAKE",
                     event_payload={"score": score, "reasons": reasons, "snapshot_state": state},
+                    record_event=False,
                 )
                 if result.get("success"):
                     action = "auto_paused"
@@ -616,7 +664,9 @@ class PlexmateGuardService:
         if state == "METADATA_BLOCKED":
             for candidate in logs.get("searches", []):
                 ModelMetadataRetry.upsert_candidate(candidate, "metadata_blocked")
-        ModelGuardEvent.record(trigger, state, "observe", message, snapshot)
+        if trigger == "schedule":
+            self._event_maintenance_if_due()
+        self.persist_observation(trigger, state, message, snapshot)
         self.log_snapshot(trigger, snapshot)
         return snapshot
 
@@ -627,7 +677,7 @@ class PlexmateGuardService:
         except Exception:
             return ""
 
-    def set_scan_limit(self, limit, action, event_trigger="manual", event_state="MANUAL_CONTROL", event_payload=None):
+    def set_scan_limit(self, limit, action, event_trigger="manual", event_state="MANUAL_CONTROL", event_payload=None, record_event=True):
         limit = self._integer(limit, -1, 0, 20)
         if limit < 0:
             return {"success": False, "message": "실행 제한값이 올바르지 않습니다."}
@@ -643,7 +693,8 @@ class PlexmateGuardService:
             message = "Plexmate 신규 스캔 제한을 %s로 설정했습니다." % limit
             payload = {"previous": current, "requested": limit}
             payload.update(event_payload or {})
-            ModelGuardEvent.record(event_trigger, event_state, action, message, payload)
+            if record_event:
+                ModelGuardEvent.record(event_trigger, event_state, action, message, payload)
             if event_trigger == "manual" and limit > 0:
                 self._clear_safety_brake_after_manual_resume()
             P.logger.info("GUARD_CONTROL action=%s previous_limit=%s requested_limit=%s result=success", action, current, limit)

@@ -34,6 +34,8 @@ class ModuleMain(PluginModuleBase):
             "baseline_scan_limit": "2",
             "desired_scan_limit": "",
             "detailed_log_enabled": "True",
+            "event_normal_heartbeat_minutes": "60",
+            "event_normal_retention_days": "30",
             "auto_brake_enabled": "False",
             "auto_brake_blocked_required": "2",
             "auto_brake_unavailable_required": "3",

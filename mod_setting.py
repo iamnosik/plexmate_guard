@@ -44,6 +44,8 @@ class ModuleSetting(PluginModuleBase):
         "auto_brake_recovery_required": (2, 10),
         "log_tail_bytes": (65536, 5242880),
         "baseline_scan_limit": (1, 20),
+        "event_normal_heartbeat_minutes": (15, 1440),
+        "event_normal_retention_days": (7, 365),
     }
 
     def _save_all_settings(self, req):

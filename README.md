@@ -33,3 +33,12 @@ https://github.com/iamnosik/plexmate_guard
 ## 롤백
 
 Guard를 끄고 대시보드에서 `기본값 복원`을 누르면 Plexmate 실행 제한을 저장된 기본값으로 되돌립니다. Guard DB와 기존 Plexmate/Plex 데이터는 삭제하지 않습니다.
+
+## 0.6.2 판단 이력 저장 최적화
+
+- 대시보드 새로고침과 metadata 사전 점검은 상태를 조회만 하며 `guard_event` 이력을 만들지 않습니다.
+- 스케줄 관찰의 `NORMAL`/`BUSY`는 상태가 바뀌는 순간과 기본 60분 heartbeat만 대표 이력으로 보존합니다.
+- `METADATA_BLOCKED`, `PLEX_UNAVAILABLE`, `PLEXMATE_DB_LOCKED`, `MIGRATION`은 연속 판정 근거 확인을 위해 스케줄마다 계속 기록합니다.
+- 과거 반복 `NORMAL` 이력은 1시간당 대표 1건으로 압축하고 보존 기간(기본 30일)을 넘긴 반복 샘플은 정리합니다. 장애에서 `NORMAL`로 복귀한 상태 전환 이력은 기간과 무관하게 보존합니다.
+- 이력 압축은 하루 한 번 이하로 수행하며 장애·수동 제어·metadata 재시도·Safety Brake 이력은 정리 대상이 아닙니다.
+- 자동 Safety Brake가 제한을 `0`으로 낮출 때 동일 동작이 이력에 두 번 기록되던 중복을 제거했습니다.
