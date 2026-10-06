@@ -5,11 +5,12 @@
 {{ macros.m_button_group([['setting_save_btn', '설정 저장'], ['guard_connection_test_btn', 'Plex 연결 테스트'], ['guard_deployment_detect_btn', '설치 방식 감지']]) }}
 <form id="setting">
   <h4>운영 모드</h4>
-  {{ macros.setting_checkbox('guard_enabled', 'Guard 사용', value=arg['guard_enabled'], desc=['ON이면 설정한 주기로 상태를 기록합니다.', '스위치를 바꾸면 즉시 저장됩니다. 자동 일시정지·자동 재시작은 수행하지 않습니다.']) }}
+  {{ macros.setting_checkbox('guard_enabled', 'Guard 사용', value=arg['guard_enabled'], desc=['ON이면 설정한 주기로 상태를 기록합니다.', '자동 제어는 아래 안전 브레이크/자동 재개 옵션을 별도로 켠 경우에만 수행합니다.']) }}
   {{ macros.setting_checkbox('main_auto_start', '자동 관찰 실행', value=arg['main_auto_start'], desc=['Guard 사용 ON일 때만 동작합니다.', '스위치를 바꾸면 즉시 저장됩니다.']) }}
   {{ macros.setting_input_text('main_interval', '관찰 주기', value=arg['main_interval'], desc=['분 단위 또는 Cron 형식', '기본값: 2']) }}
   {{ macros.setting_checkbox('detailed_log_enabled', '상세 운영 로그', value=arg['detailed_log_enabled'], desc=['조회·관찰마다 상태 판단 근거를 Guard 로그에 기록합니다.', '스위치를 바꾸면 즉시 저장됩니다. Plex 토큰·원본 로그 내용·개별 파일 경로는 기록하지 않습니다.']) }}
-  {{ macros.setting_checkbox('auto_brake_enabled', '안전 브레이크 자동 0 전환', value=arg['auto_brake_enabled'], desc=['정체 또는 Plex 응답 실패가 연속 확인되면 Plexmate 신규 스캔 제한을 0으로 바꿉니다.', '자동 재개·자동 Plex 재시작은 하지 않습니다.']) }}
+  {{ macros.setting_checkbox('auto_brake_enabled', '안전 브레이크 자동 0 전환', value=arg['auto_brake_enabled'], desc=['정체·Plex 응답 실패·DB 잠김이 연속 확인되면 Plexmate 신규 스캔 제한을 0으로 바꿉니다.', '진행 중인 스캔과 Plex 자체를 강제 종료하지 않습니다.']) }}
+  {{ macros.setting_checkbox('auto_resume_enabled', '안정화 후 자동 재개', value=arg.get('auto_resume_enabled', 'False'), desc=['기본값 OFF. Guard가 직접 자동 정지시킨 경우에만 동작합니다.', '회복 후 바로 원복하지 않고 0 → 1 시험 재개 → 안정 감시 → 정지 전 실행 수 복원 순서로 진행합니다.']) }}
   <div id="guard_mode_save_status" class="guard-muted">운영 모드 스위치는 즉시 저장됩니다.</div>
   {{ macros.m_hr() }}
   <h4>판단 이력 저장</h4>
@@ -36,7 +37,11 @@
   {{ macros.setting_input_int('auto_brake_blocked_required', '정체 연속 확인 횟수', value=arg['auto_brake_blocked_required'], min=2, max=10, desc=['METADATA_BLOCKED가 이 횟수만큼 스케줄 관찰에서 연속 확인될 때만 자동 0 전환합니다.', '기본값: 2']) }}
   {{ macros.setting_input_int('auto_brake_unavailable_required', 'Plex 응답 실패 연속 횟수', value=arg['auto_brake_unavailable_required'], min=2, max=10, desc=['PLEX_UNAVAILABLE가 이 횟수만큼 연속 확인될 때만 자동 0 전환합니다.', '기본값: 3']) }}
   {{ macros.setting_input_int('auto_brake_db_lock_required', 'DB 잠김 브레이크 연속 횟수', value=arg.get('auto_brake_db_lock_required', '2'), min=2, max=10, desc=['PLEXMATE_DB_LOCKED가 이 횟수만큼 스케줄에서 연속 확인될 때만 실행 제한을 0으로 바꿉니다.', '기본값: 2']) }}
-  {{ macros.setting_input_int('auto_brake_recovery_required', '재개 권고 정상 연속 횟수', value=arg['auto_brake_recovery_required'], min=2, max=10, desc=['자동 0 전환 뒤 NORMAL이 이 횟수만큼 연속 확인되면 재개 가능으로 표시합니다.', '자동으로 제한을 올리지는 않습니다. 기본값: 3']) }}
+  {{ macros.setting_input_int('auto_brake_recovery_required', '회복 정상 연속 횟수', value=arg['auto_brake_recovery_required'], min=2, max=10, desc=['자동 0 전환 뒤 NORMAL이 이 횟수만큼 연속 확인되면 회복 단계로 진입합니다.', '기본값: 3']) }}
+  {{ macros.setting_input_int('auto_resume_stable_minutes', '자동 재개 전 추가 안정화(분)', value=arg.get('auto_resume_stable_minutes', '10'), min=1, max=120, desc=['회복 판정 뒤 이 시간 동안 NORMAL·Plex API·DB 잠김·SCANNING·호스트 I/O를 다시 확인합니다.', '방해 신호가 나오면 안정화 시간을 처음부터 다시 셉니다. 기본값: 10분']) }}
+  {{ macros.setting_input_int('auto_resume_probe_minutes', '1개 시험 재개 감시(분)', value=arg.get('auto_resume_probe_minutes', '15'), min=1, max=120, desc=['먼저 실행 제한 1로 재개한 뒤 이 시간 동안 재발 여부를 감시합니다.', '시험 중 위험 신호가 나오면 즉시 0으로 되돌리고 수동 확인 상태로 전환합니다. 기본값: 15분']) }}
+  {{ macros.setting_input_int('auto_resume_flap_window_minutes', '자동 재개 후 재발 차단(분)', value=arg.get('auto_resume_flap_window_minutes', '30'), min=5, max=360, desc=['자동 재개 뒤 이 시간 안에 다시 안전 브레이크가 걸리면 자동 재개를 반복하지 않고 수동 확인을 요구합니다.', '기본값: 30분']) }}
+  {{ macros.setting_input_int('auto_resume_max_d_state', '자동 재개 허용 D-state 최대 수', value=arg.get('auto_resume_max_d_state', '3'), min=0, max=50, desc=['NAS에서 디스크 대기(D-state) 프로세스가 이 값을 초과하면 자동 재개를 미룹니다.', '지난 FF HDD I/O 포화 재발 방지를 위한 보조 조건입니다. 기본값: 3']) }}
   {{ macros.setting_input_int('log_tail_bytes', '읽을 로그 크기(bytes)', value=arg['log_tail_bytes'], min=65536, max=5242880) }}
   {{ macros.m_hr() }}
   <h4>Plexmate 제어</h4>
@@ -69,17 +74,18 @@ function saveGuardMode() {
     guard_enabled: guardModeValue('guard_enabled'),
     main_auto_start: guardModeValue('main_auto_start'),
     detailed_log_enabled: guardModeValue('detailed_log_enabled'),
-    auto_brake_enabled: guardModeValue('auto_brake_enabled')
+    auto_brake_enabled: guardModeValue('auto_brake_enabled'),
+    auto_resume_enabled: guardModeValue('auto_resume_enabled')
   }, function(ret) {
     if (ret.data) {
-      ['guard_enabled', 'main_auto_start', 'detailed_log_enabled', 'auto_brake_enabled'].forEach(function(key) {
+      ['guard_enabled', 'main_auto_start', 'detailed_log_enabled', 'auto_brake_enabled', 'auto_resume_enabled'].forEach(function(key) {
         $('#' + key).prop('checked', String(ret.data[key]) === 'True');
       });
       $('#guard_mode_save_status').text('운영 모드 저장 완료');
     }
   });
 }
-$('#guard_enabled, #main_auto_start, #detailed_log_enabled, #auto_brake_enabled').change(saveGuardMode);
+$('#guard_enabled, #main_auto_start, #detailed_log_enabled, #auto_brake_enabled, #auto_resume_enabled').change(saveGuardMode);
 $('#guard_connection_test_btn').click(function(e){e.preventDefault();guardAjax('setting','connection_test',{},function(ret){ if(ret.data) alert('HTTP '+ret.data.status+' · '+ret.data.latency_ms+'ms'); });});
 $('#guard_deployment_detect_btn').click(function(e){e.preventDefault();guardAjax('setting','deployment_detect',{},function(ret){ if(ret.data) alert('감지: '+ret.data.detected+'\n제어: '+ret.data.control+'\n'+(ret.data.reason||'')); });});
 </script>

@@ -49,6 +49,19 @@ class ModuleMain(PluginModuleBase):
             "auto_brake_db_lock_required": "2",
             "auto_brake_last_reason": "",
             "auto_brake_last_action_at": "",
+            # 자동 재개는 별도 동의가 있어야만 동작하며 상태는 FF 재시작 뒤에도 유지한다.
+            "auto_resume_enabled": "False",
+            "auto_resume_stable_minutes": "10",
+            "auto_resume_probe_minutes": "15",
+            "auto_resume_flap_window_minutes": "30",
+            "auto_resume_max_d_state": "3",
+            "auto_resume_previous_limit": "",
+            "auto_resume_owner": "",
+            "auto_resume_stage": "idle",
+            "auto_resume_recovery_ready_at": "",
+            "auto_resume_probe_started_at": "",
+            "auto_resume_last_auto_at": "",
+            "auto_resume_manual_required": "False",
         }
         P.plexmate_guard_service = PlexmateGuardService(P)
 

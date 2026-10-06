@@ -25,7 +25,7 @@ class ModuleSetting(PluginModuleBase):
         if P.ModelSetting.get_bool("guard_enabled") and P.ModelSetting.get_bool("main_auto_start"):
             P.logic.scheduler_start("main")
 
-    _BOOL_KEYS = ("guard_enabled", "main_auto_start", "detailed_log_enabled", "auto_brake_enabled")
+    _BOOL_KEYS = ("guard_enabled", "main_auto_start", "detailed_log_enabled", "auto_brake_enabled", "auto_resume_enabled")
     _TEXT_KEYS = ("docker_container", "plex_log_path", "plexmate_log_path")
     _INT_RANGES = {
         "http_timeout_seconds": (1, 15),
@@ -42,6 +42,10 @@ class ModuleSetting(PluginModuleBase):
         "auto_brake_unavailable_required": (2, 10),
         "auto_brake_db_lock_required": (2, 10),
         "auto_brake_recovery_required": (2, 10),
+        "auto_resume_stable_minutes": (1, 120),
+        "auto_resume_probe_minutes": (1, 120),
+        "auto_resume_flap_window_minutes": (5, 360),
+        "auto_resume_max_d_state": (0, 50),
         "log_tail_bytes": (65536, 5242880),
         "baseline_scan_limit": (1, 20),
         "event_normal_heartbeat_minutes": (15, 1440),
@@ -107,7 +111,7 @@ class ModuleSetting(PluginModuleBase):
                                 "msg": data.get("message"), "data": data})
             if command == "operation_mode_save":
                 changed = []
-                for key in ("guard_enabled", "main_auto_start", "detailed_log_enabled", "auto_brake_enabled"):
+                for key in ("guard_enabled", "main_auto_start", "detailed_log_enabled", "auto_brake_enabled", "auto_resume_enabled"):
                     value = "True" if str(req.form.get(key, "False")).lower() in ("true", "1", "on", "yes") else "False"
                     if P.ModelSetting.get(key) != value:
                         P.ModelSetting.set(key, value)
@@ -121,7 +125,7 @@ class ModuleSetting(PluginModuleBase):
                 return jsonify({
                     "ret": "success",
                     "msg": "운영 모드를 즉시 저장했습니다.",
-                    "data": {key: P.ModelSetting.get(key) for key in ("guard_enabled", "main_auto_start", "detailed_log_enabled", "auto_brake_enabled")},
+                    "data": {key: P.ModelSetting.get(key) for key in ("guard_enabled", "main_auto_start", "detailed_log_enabled", "auto_brake_enabled", "auto_resume_enabled")},
                 })
             if command == "connection_test":
                 identity = self.service._request("/identity")
